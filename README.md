@@ -7,7 +7,7 @@ Este documento sirve como guía central para nuestro proyecto de reconocimiento 
 ## Funcionalidades Actuales
 
 -   **Reconocimiento en Tiempo Real**: El sistema utiliza la cámara para capturar y reconocer señas de forma instantánea.
--   **Normalización Robusta**: El algoritmo de reconocimiento es invariante a la escala y a la distancia de la mano a la cámara, lo que mejora considerablemente la precisión.
+-   **Normalización Robusta (En desarrollo)**: El algoritmo de reconocimiento es invariante a la escala y a la distancia de la mano a la cámara, lo que mejora considerablemente la precisión.
 -   **Arquitectura Modular**: El código está estructurado en módulos para facilitar su comprensión, mantenimiento y la colaboración en equipo.
 -   **Extensible**: El sistema está diseñado para que sea sencillo añadir nuevas imágenes y así mejorar continuamente el modelo de reconocimiento.
 
@@ -47,7 +47,7 @@ python hand_vectorizer_final.py
 
 **Nota**: La primera ejecución tardará unos minutos mientras se procesa y se aprende del conjunto de datos. Tras este paso inicial, se activará la cámara. Al mostrar una seña, la clasificación aparecerá en la consola. Para detener la ejecución, presione la tecla `q`.
 
-### 3. Ampliación del Conjunto de Datos
+### 3. Ampliación del Conjunto de Datos (DESAROLLO)
 
 Este paso es fundamental para mejorar progresivamente la precisión del modelo. Para añadir nuevas imágenes, el flujo de trabajo es el siguiente:
 

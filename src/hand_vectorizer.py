@@ -1,3 +1,7 @@
+# =============================================================
+# Archivo: hand_vectorizer.py
+# Funcionalidad: Define la clase HandVectorizer para extraer y vectorizar características de las manos a partir de imágenes, utilizando MediaPipe y OpenCV. Permite procesar datasets de imágenes para reconocimiento de señas.
+# =============================================================
 import cv2
 import numpy as np
 import pandas as pd

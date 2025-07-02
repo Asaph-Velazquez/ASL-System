@@ -1,4 +1,11 @@
+# =============================================================
+# Archivo: add_new_dataset.py
+# Funcionalidad: Permite agregar un nuevo dataset de imágenes de señas (ASL) al sistema, combinándolo con el dataset existente, procesando las imágenes, validando la estructura y actualizando los archivos de referencia necesarios para el reconocimiento de señas.
+# =============================================================
 import numpy as np
+# ===============================
+# Importación de librerías necesarias para procesamiento de datos, imágenes y manejo de archivos
+# ===============================
 import pandas as pd
 import cv2
 import mediapipe as mp
@@ -11,10 +18,15 @@ class DatasetManager:
     """
     Gestor para agregar nuevos datasets al sistema de reconocimiento de señas
     """
-    
+    # ===============================
+    # Inicialización del gestor y del vectorizador de manos
+    # ===============================
     def __init__(self):
         self.vectorizer = HandVectorizer()
         
+    # ===============================
+    # Método principal para agregar un nuevo dataset al sistema
+    # ===============================
     def add_new_dataset(self, new_dataset_path, output_name="combined_dataset"):
         """
         Agrega un nuevo dataset al sistema existente
@@ -47,6 +59,9 @@ class DatasetManager:
         
         print(f"✅ Dataset combinado guardado como: {output_name}")
         
+    # ===============================
+    # Carga el dataset existente si existe
+    # ===============================
     def load_existing_dataset(self):
         """Carga el dataset existente"""
         print("📊 Cargando dataset existente...")
@@ -66,6 +81,9 @@ class DatasetManager:
         print("⚠️  No se encontró dataset existente. Se creará uno nuevo.")
         return pd.DataFrame()
     
+    # ===============================
+    # Procesa el nuevo dataset usando el vectorizador
+    # ===============================
     def process_new_dataset(self, dataset_path):
         """Procesa el nuevo dataset"""
         print(f"🔄 Procesando nuevo dataset: {dataset_path}")
@@ -84,6 +102,9 @@ class DatasetManager:
             print(f"❌ Error procesando nuevo dataset: {e}")
             return None
     
+    # ===============================
+    # Combina el dataset existente con el nuevo, alineando columnas y eliminando duplicados
+    # ===============================
     def combine_datasets(self, existing_data, new_data):
         """Combina el dataset existente con el nuevo"""
         print("🔗 Combinando datasets...")
@@ -133,12 +154,18 @@ class DatasetManager:
         
         return combined_data
     
+    # ===============================
+    # Guarda el dataset combinado en un archivo CSV
+    # ===============================
     def save_combined_dataset(self, combined_data, output_name):
         """Guarda el dataset combinado"""
         output_path = f"{output_name}.csv"
         combined_data.to_csv(output_path, index=False)
         print(f"💾 Dataset guardado: {output_path}")
     
+    # ===============================
+    # Actualiza el archivo de características de referencia optimizadas
+    # ===============================
     def update_reference_features(self, combined_data, dataset_name):
         """Actualiza el archivo de características de referencia"""
         print("🔄 Actualizando características de referencia...")
@@ -181,6 +208,9 @@ class DatasetManager:
         print(f"✅ Características de referencia guardadas: {reference_path}")
         print(f"📊 {valid_classes} clases procesadas")
     
+    # ===============================
+    # Valida que la estructura del nuevo dataset sea la correcta (carpetas por clase, imágenes, etc.)
+    # ===============================
     def validate_dataset_structure(self, dataset_path):
         """
         Valida que el nuevo dataset tenga la estructura correcta
@@ -231,6 +261,9 @@ class DatasetManager:
 
 def main():
     """Función principal para agregar nuevos datasets"""
+    # ===============================
+    # Interfaz de usuario por consola para agregar y validar un nuevo dataset
+    # ===============================
     print("🖐️  GESTOR DE DATASETS PARA RECONOCIMIENTO DE SEÑAS ASL")
     print("=" * 60)
     

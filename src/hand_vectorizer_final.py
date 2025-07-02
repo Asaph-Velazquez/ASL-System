@@ -1,3 +1,8 @@
+# =============================================================
+# Archivo: hand_vectorizer_final.py
+# Funcionalidad: Ejecuta el procesamiento final de los datasets de imágenes de manos, aplicando la vectorización y generando los archivos necesarios para el reconocimiento de señas.
+# =============================================================
+
 import numpy as np
 import pandas as pd
 import cv2
