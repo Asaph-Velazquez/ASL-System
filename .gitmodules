@@ -1,3 +1,6 @@
 [submodule "ASL-MobileAPP"]
 	path = ASL-MobileAPP
 	url = https://github.com/Asaph-Velazquez/ASL-MobileAPP.git
+[submodule "ASL-Web"]
+	path = ASL-Web
+	url = https://github.com/Asaph-Velazquez/ASL-Web.git
