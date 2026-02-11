@@ -158,7 +158,6 @@ class HandVectorizer:
                 }
                 
                 if results.multi_hand_landmarks:
-                    # Tomar la primera mano detectada
                     hand_landmarks = results.multi_hand_landmarks[0]
                     
                     # Extraer coordenadas 2D
@@ -173,7 +172,6 @@ class HandVectorizer:
                     landmarks_data['landmarks'] = landmarks_2d
                     landmarks_data['hand_landmarks'] = hand_landmarks
                     
-                    # Extraer coordenadas 3D si están disponibles
                     if results.multi_hand_world_landmarks:
                         hand_world_landmarks = results.multi_hand_world_landmarks[0]
                         landmarks_data['hand_world_landmarks'] = hand_world_landmarks
@@ -192,7 +190,6 @@ class HandVectorizer:
             except Exception as e:
                 continue
         
-        # Si no se detectó mano con ningún método
         print(f"No se detectaron manos en: {image_path} (probados {len(preprocessing_methods)} métodos)")
         return None
     

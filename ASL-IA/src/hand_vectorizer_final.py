@@ -21,7 +21,7 @@ class OptimizedHandVectorizer(HandVectorizer):
         # Replicar inicialización de MediaPipe sin cargar el dataset base
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
-        self.project_root = Path(__file__).parent.parent # Apunta a la raíz del proyecto (ASL-System)
+        self.project_root = Path(__file__).parent.parent 
         self.hands = self.mp_hands.Hands(
             static_image_mode=True,
             max_num_hands=2,
@@ -126,7 +126,6 @@ class OptimizedHandVectorizer(HandVectorizer):
         except FileNotFoundError:
             print("🔄 Procesando dataset para extraer características optimizadas...")
             
-            # Si no existe, procesar el dataset y guardarlo
             self.reference_features, self.reference_labels = self.process_and_save_dataset(
                 dataset_path, processed_file
             )
@@ -204,7 +203,7 @@ class OptimizedHandVectorizer(HandVectorizer):
         
         for class_name, ref_features in self.reference_data.items():
             if len(ref_features) == len(current_features):
-                # Calcular similitud de coseno (invariante a escala)
+                # Calcular similitud de coseno
                 cosine_similarity = np.dot(current_features, ref_features) / (
                     np.linalg.norm(current_features) * np.linalg.norm(ref_features)
                 )
@@ -214,7 +213,7 @@ class OptimizedHandVectorizer(HandVectorizer):
                 if np.isnan(correlation):
                     correlation = 0
                 
-                # Score combinado (ponderado hacia similitud de coseno)
+                # Score combinado
                 combined_score = (cosine_similarity * 0.7 + correlation * 0.3)
                 
                 top_matches.append({
@@ -276,8 +275,9 @@ class OptimizedHandVectorizer(HandVectorizer):
         
         last_recognition = ""
         frame_count = 0
-        recognition_interval = 20  # Reconocer cada 20 frames (más estable)
+        recognition_interval = 20  # Reconocer cada 20 frames
         
+        cv2.namedWindow('Sistema Optimizado - Presiona q para salir', cv2.WINDOW_NORMAL)
         while True:
             ret, frame = cap.read()
             if not ret:
@@ -351,13 +351,12 @@ def main():
     print("   • Menos sensible a variaciones de posición")
     print("=" * 60)
     
-    # Crear vectorizador optimizado
+    # Crear vectorizador
     vectorizer = OptimizedHandVectorizer()
     
-    # Cargar dataset optimizado
+    # Cargar dataset
     vectorizer.load_reference_dataset_optimized()
     
-    # Mostrar clases disponibles
     if vectorizer.reference_data:
         classes = sorted(vectorizer.reference_data.keys())
         print(f"\n📚 Clases disponibles ({len(classes)}):")
