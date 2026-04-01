@@ -1,0 +1,42 @@
+{
+	"folders": [
+		{
+			"name": "ASL-IA",
+			"path": "ASL-IA"
+		},
+		{
+			"name": "ASL-MobileAPP",
+			"path": "ASL-MobileAPP"
+		},
+		{
+			"name": "ASL-Web",
+			"path": "ASL-Web"
+		},
+		{
+			"name": "Docs",
+			"path": "Docs"
+		}
+	],
+	"settings": {
+		"files.exclude": {
+			"**/.git": true,
+			"**/.gitmodules": true,
+			"**/node_modules": true,
+			"**/__pycache__": true,
+			"**/*.pyc": true,
+			"**/.venv": true,
+			"**/.idea": true,
+			"**/.vscode": true,
+			"**/*.log": true,
+			"**/.DS_Store": true
+		},
+		"search.exclude": {
+			"**/node_modules": true,
+			"**/.git": true,
+			"**/.venv": true,
+			"**/__pycache__": true,
+			"**/dist": true,
+			"**/.expo": true
+		}
+	}
+}

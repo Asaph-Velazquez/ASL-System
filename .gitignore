@@ -38,6 +38,7 @@ coverage/
 # ============================================
 # Environment & Secrets
 # ============================================
+.venv/
 .env
 .env.local
 .env.*.local
@@ -55,6 +56,8 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 .sisyphus/
+.agents/
+skills-lock.json
 
 # ============================================
 # OS & System Files
@@ -81,3 +84,8 @@ desktop.ini
 .nyc_output/
 coverage/
 *.lcov
+
+# ============================================
+# Documentation
+# ============================================
+Docs/
