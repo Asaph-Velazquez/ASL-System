@@ -21,7 +21,7 @@ class OptimizedHandVectorizer(HandVectorizer):
         # Replicar inicialización de MediaPipe sin cargar el dataset base
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
-        self.project_root = Path(__file__).parent.parent 
+        self.project_root = Path(__file__).resolve().parents[2]
         self.hands = self.mp_hands.Hands(
             static_image_mode=True,
             max_num_hands=2,

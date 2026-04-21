@@ -14,6 +14,7 @@ import json
 class HandVectorizer:
     def __init__(self, reference_dataset_path="data/kagglehub/asl_dataset", reference_csv_path="data/hand_landmarks_dataset_corrected.csv"):
         """Inicializa el vectorizador de manos con MediaPipe"""
+        self.project_root = Path(__file__).resolve().parents[2]
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
         self.hands = self.mp_hands.Hands(
@@ -23,25 +24,32 @@ class HandVectorizer:
             min_tracking_confidence=0.3,
             model_complexity=1
         )
-        self.reference_dataset_path = reference_dataset_path
-        self.reference_csv_path = reference_csv_path
+        self.reference_dataset_path = self.resolve_project_path(reference_dataset_path)
+        self.reference_csv_path = self.resolve_project_path(reference_csv_path)
         # Cargar dataset de referencia al inicializar
         self.reference_data = None
         self.reference_landmarks, self.reference_labels = self.load_reference_dataset()
+
+    def resolve_project_path(self, path_str: str) -> Path:
+        path = Path(path_str)
+        return path if path.is_absolute() else self.project_root / path
         
     def load_reference_dataset(self, dataset_path="data/kagglehub/asl_dataset"):
         """Carga el dataset de referencia una sola vez"""
+        dataset_path = self.resolve_project_path(dataset_path)
+        corrected_csv = self.resolve_project_path("data/hand_landmarks_dataset_corrected.csv")
+        fallback_csv = self.resolve_project_path("data/hand_landmarks_dataset.csv")
         # Intentar cargar el dataset corregido primero
         try:
-            df = pd.read_csv("data/hand_landmarks_dataset_corrected.csv")
+            df = pd.read_csv(corrected_csv)
             print("Dataset corregido cargado desde CSV")
         except FileNotFoundError:
             try:
-                df = pd.read_csv("data/hand_landmarks_dataset.csv")
+                df = pd.read_csv(fallback_csv)
                 print("Dataset cargado desde CSV")
             except FileNotFoundError:
                 print("Dataset no encontrado. Procesando dataset...")
-                df = self.process_dataset(dataset_path, "data/hand_landmarks_dataset.csv")
+                df = self.process_dataset(dataset_path, fallback_csv)
         
         if not df.empty:
             # Crear diccionario con características promedio por clase
@@ -204,7 +212,7 @@ class HandVectorizer:
         Returns:
             DataFrame con todos los landmarks extraídos
         """
-        dataset_path = Path(dataset_path)
+        dataset_path = self.resolve_project_path(dataset_path)
         all_landmarks = []
         
         # Recorrer todas las carpetas de letras/números
@@ -247,6 +255,7 @@ class HandVectorizer:
         
         # Guardar resultados
         if output_path:
+            output_path = self.resolve_project_path(output_path)
             df.to_csv(output_path, index=False)
             print(f"Resultados guardados en: {output_path}")
         
@@ -633,7 +642,7 @@ def main():
     """Función principal para ejecutar la vectorización de manos.
     """
     dataset_path = "data/kagglehub/asl_dataset"
-    csv_path = "hand_landmarks_dataset.csv"
+    csv_path = "data/hand_landmarks_dataset.csv"
     vectorizer = HandVectorizer()
     
     # Procesar dataset

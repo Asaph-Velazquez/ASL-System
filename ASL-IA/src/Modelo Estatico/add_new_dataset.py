@@ -318,7 +318,7 @@ def main():
         print(f"\n🚀 Para usar el nuevo dataset:")
         print(f"1. Copia {output_name}.csv como 'data/hand_landmarks_dataset_corrected.csv'")
         print(f"2. Copia {output_name}_reference_features.pkl como 'data/reference_features_optimized.pkl'")
-        print(f"3. Ejecuta: python hand_vectorizer_final.py")
+        print(f"3. Ejecuta: python \"src/Modelo Estatico/hand_vectorizer_final.py\"")
     else:
         print("❌ Operación cancelada")
 
