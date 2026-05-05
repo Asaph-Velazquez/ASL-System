@@ -10,9 +10,10 @@ from pathlib import Path
 import mediapipe as mp
 from typing import List, Dict, Tuple
 import json
+import copy
 
 class HandVectorizer:
-    def __init__(self, reference_dataset_path="data/kagglehub/asl_dataset", reference_csv_path="data/hand_landmarks_dataset_corrected.csv"):
+    def __init__(self, reference_dataset_path="data/kagglehub/asl_dataset", reference_csv_path="data/hand_landmarks_dataset_cleaned.csv"):
         """Inicializa el vectorizador de manos con MediaPipe"""
         self.project_root = Path(__file__).resolve().parents[2]
         self.mp_hands = mp.solutions.hands
@@ -37,19 +38,38 @@ class HandVectorizer:
     def load_reference_dataset(self, dataset_path="data/kagglehub/asl_dataset"):
         """Carga el dataset de referencia una sola vez"""
         dataset_path = self.resolve_project_path(dataset_path)
+        # Soportar dataset adicional 'alphabet' dentro de data/kagglehub
+        alphabet_path = self.project_root / "data" / "kagglehub" / "alphabet"
+        cleaned_csv = self.resolve_project_path("data/hand_landmarks_dataset_cleaned.csv")
         corrected_csv = self.resolve_project_path("data/hand_landmarks_dataset_corrected.csv")
         fallback_csv = self.resolve_project_path("data/hand_landmarks_dataset.csv")
         # Intentar cargar el dataset corregido primero
         try:
-            df = pd.read_csv(corrected_csv)
-            print("Dataset corregido cargado desde CSV")
+            df = pd.read_csv(cleaned_csv)
+            print("Dataset limpio cargado desde CSV")
         except FileNotFoundError:
             try:
-                df = pd.read_csv(fallback_csv)
-                print("Dataset cargado desde CSV")
+                df = pd.read_csv(corrected_csv)
+                print("Dataset corregido cargado desde CSV")
             except FileNotFoundError:
-                print("Dataset no encontrado. Procesando dataset...")
-                df = self.process_dataset(dataset_path, fallback_csv)
+                try:
+                    df = pd.read_csv(fallback_csv)
+                    print("Dataset cargado desde CSV")
+                except FileNotFoundError:
+                    print("Dataset no encontrado. Procesando dataset...")
+                    # Si existe la carpeta 'alphabet', procesarla también y concatenar
+                    if alphabet_path.exists() and alphabet_path.is_dir():
+                        print(f"Se detectó dataset adicional: {alphabet_path}")
+                        df1 = self.process_dataset(dataset_path)
+                        df2 = self.process_dataset(str(alphabet_path))
+                        if df1 is None:
+                            df = df2
+                        elif df2 is None:
+                            df = df1
+                        else:
+                            df = pd.concat([df1, df2], ignore_index=True)
+                    else:
+                        df = self.process_dataset(dataset_path, fallback_csv)
         
         if not df.empty:
             # Crear diccionario con características promedio por clase
@@ -57,29 +77,24 @@ class HandVectorizer:
             valid_classes = 0
             
             for class_name in df['class'].unique():
+                # Normalizar nombre de clase a minúscula (las carpetas externas pueden usar mayúsculas)
+                class_name = str(class_name).lower()
                 # Solo procesar clases válidas (letras a-z y números 0-9)
                 if class_name in [str(i) for i in range(10)] + [chr(i) for i in range(97, 123)]:
-                    class_data = df[df['class'] == class_name]
-                    
-                    # Calcular características promedio para esta clase
-                    avg_features = []
-                    for i in range(21):  # 21 landmarks
-                        x_avg = class_data[f'landmark_{i}_x'].mean()
-                        y_avg = class_data[f'landmark_{i}_y'].mean()
-                        z_avg = class_data[f'landmark_{i}_z'].mean()
-                        avg_features.extend([x_avg, y_avg, z_avg])
-                    
-                    # Agregar 5 distancias promedio (simuladas por ahora)
-                    avg_features.extend([0.1, 0.2, 0.3, 0.4, 0.5])
-                    
-                    # Asegurar que tengamos exactamente 68 características
-                    while len(avg_features) < 68:
-                        avg_features.append(0.0)
-                    
-                    if len(avg_features) > 68:
-                        avg_features = avg_features[:68]
-                    
-                    self.reference_data[class_name] = np.array(avg_features)
+                    class_data = df[df['class'].str.lower() == class_name]
+
+                    # Generar características reales por fila y promediarlas
+                    class_features = []
+                    for _, row in class_data.iterrows():
+                        row_features = self.get_generated_landmark_features(row)
+                        if row_features is not None:
+                            class_features.append(row_features)
+
+                    if not class_features:
+                        continue
+
+                    avg_features = np.mean(class_features, axis=0)
+                    self.reference_data[class_name] = np.asarray(avg_features, dtype=float)
                     valid_classes += 1
             
             print(f"Dataset de referencia cargado con {valid_classes} clases válidas")
@@ -98,6 +113,36 @@ class HandVectorizer:
         else:
             print("No se pudo cargar el dataset de referencia")
             return None, None
+
+    def get_generated_landmark_features(self, row: pd.Series) -> np.ndarray:
+        """
+        Construye un vector de 68 características a partir de una fila del CSV
+        usando landmarks reales y distancias desde la muñeca a las puntas.
+        """
+        landmarks = []
+        for i in range(21):
+            landmarks.append(
+                [
+                    row[f"landmark_{i}_x"],
+                    row[f"landmark_{i}_y"],
+                    row[f"landmark_{i}_z"],
+                ]
+            )
+
+        landmarks = np.asarray(landmarks, dtype=float)
+        features = landmarks.flatten().tolist()
+
+        wrist = landmarks[0]
+        fingertip_indices = [4, 8, 12, 16, 20]
+        distances = [np.linalg.norm(wrist - landmarks[idx]) for idx in fingertip_indices]
+        features.extend(distances)
+
+        if len(features) < 68:
+            features.extend([0.0] * (68 - len(features)))
+        elif len(features) > 68:
+            features = features[:68]
+
+        return np.asarray(features, dtype=float)
 
     def preprocess_image(self, image):
         """
@@ -218,7 +263,8 @@ class HandVectorizer:
         # Recorrer todas las carpetas de letras/números
         for class_folder in dataset_path.iterdir():
             if class_folder.is_dir():
-                class_name = class_folder.name
+                # Normalizar nombre de carpeta a minúsculas para unir A/B y a/b
+                class_name = class_folder.name.lower()
                 
                 # Solo procesar clases válidas (letras a-z y números 0-9)
                 if class_name in [str(i) for i in range(10)] + [chr(i) for i in range(97, 123)]:
@@ -344,6 +390,87 @@ class HandVectorizer:
         
         return np.array(features)
 
+    def mirror_landmarks_data(self, landmarks_data: Dict) -> Dict:
+        """
+        Genera una versión espejo horizontal de los landmarks detectados.
+        Esto permite reconocer la misma seña con mano izquierda o derecha.
+        """
+        if not landmarks_data or not landmarks_data.get('landmarks'):
+            return None
+
+        mirrored_data = copy.deepcopy(landmarks_data)
+        mirrored_landmarks = []
+        for landmark in landmarks_data['landmarks']:
+            mirrored_landmarks.append({
+                'x': 1.0 - landmark['x'],
+                'y': landmark['y'],
+                'z': landmark['z']
+            })
+
+        mirrored_data['landmarks'] = mirrored_landmarks
+        mirrored_data['mirrored'] = True
+        return mirrored_data
+
+    def score_features_against_reference(self, current_features: np.ndarray):
+        """
+        Compara un vector de características contra las referencias y devuelve
+        el mejor match junto con el ranking completo.
+        """
+        current_features_normalized = self.normalize_features(current_features)
+
+        best_match = None
+        best_score = -1
+        best_distance = float('inf')
+        top_matches = []
+
+        for class_name, ref_features in self.reference_data.items():
+            if len(ref_features) == len(current_features):
+                ref_features_normalized = self.normalize_features(ref_features)
+
+                cosine_denominator = (
+                    np.linalg.norm(current_features_normalized)
+                    * np.linalg.norm(ref_features_normalized)
+                )
+                if cosine_denominator == 0:
+                    cosine_similarity = 0
+                else:
+                    cosine_similarity = np.dot(
+                        current_features_normalized,
+                        ref_features_normalized
+                    ) / cosine_denominator
+
+                correlation = np.corrcoef(
+                    current_features_normalized,
+                    ref_features_normalized
+                )[0, 1]
+                if np.isnan(correlation):
+                    correlation = 0
+
+                euclidean_distance = np.linalg.norm(
+                    current_features_normalized - ref_features_normalized
+                )
+                combined_score = (
+                    cosine_similarity * 0.4
+                    + correlation * 0.4
+                    + (1 - euclidean_distance / 10) * 0.2
+                )
+
+                top_matches.append({
+                    'class': class_name,
+                    'cosine_similarity': cosine_similarity,
+                    'correlation': correlation,
+                    'euclidean_distance': euclidean_distance,
+                    'combined_score': combined_score
+                })
+
+                if combined_score > best_score:
+                    best_score = combined_score
+                    best_match = class_name
+                    best_distance = euclidean_distance
+
+        top_matches.sort(key=lambda x: x['combined_score'], reverse=True)
+        return best_match, best_score, best_distance, top_matches
+
     def get_gesture_description(self, class_name):
         """
         Obtiene una descripción amigable de la seña
@@ -402,62 +529,40 @@ class HandVectorizer:
         if self.reference_data is None:
             return "❌ Dataset no cargado"
         
-        # Extraer características de la mano actual
+        feature_variants = []
+
         current_features = self.get_landmark_features(landmarks_data)
-        if current_features is None:
+        if current_features is not None:
+            feature_variants.append(("original", current_features))
+
+        mirrored_landmarks_data = self.mirror_landmarks_data(landmarks_data)
+        mirrored_features = self.get_landmark_features(mirrored_landmarks_data)
+        if mirrored_features is not None:
+            feature_variants.append(("mirrored", mirrored_features))
+
+        if not feature_variants:
             return "❌ No se pudieron extraer características"
-        
-        # Normalizar características (z-score)
-        current_features_normalized = self.normalize_features(current_features)
-        
-        # Comparar con cada clase de referencia
+
+        best_variant = "original"
         best_match = None
-        best_score = -1  # Para similitud de coseno (mayor es mejor)
-        best_distance = float('inf')  # Para distancia euclidiana (menor es mejor)
-        
+        best_score = -1
+        best_distance = float('inf')
         top_matches = []
-        
-        for class_name, ref_features in self.reference_data.items():
-            if len(ref_features) == len(current_features):
-                # Normalizar características de referencia
-                ref_features_normalized = self.normalize_features(ref_features)
-                
-                # Calcular múltiples métricas
-                # 1. Similitud de coseno (más robusta a escala)
-                cosine_similarity = np.dot(current_features_normalized, ref_features_normalized) / (
-                    np.linalg.norm(current_features_normalized) * np.linalg.norm(ref_features_normalized)
-                )
-                
-                # 2. Correlación de Pearson
-                correlation = np.corrcoef(current_features_normalized, ref_features_normalized)[0, 1]
-                if np.isnan(correlation):
-                    correlation = 0
-                
-                # 3. Distancia euclidiana normalizada
-                euclidean_distance = np.linalg.norm(current_features_normalized - ref_features_normalized)
-                
-                # 4. Score combinado (ponderado)
-                combined_score = (cosine_similarity * 0.4 + correlation * 0.4 + (1 - euclidean_distance/10) * 0.2)
-                
-                # Guardar para ranking
-                top_matches.append({
-                    'class': class_name,
-                    'cosine_similarity': cosine_similarity,
-                    'correlation': correlation,
-                    'euclidean_distance': euclidean_distance,
-                    'combined_score': combined_score
-                })
-                
-                if combined_score > best_score:
-                    best_score = combined_score
-                    best_match = class_name
-                    best_distance = euclidean_distance
+
+        for variant_name, variant_features in feature_variants:
+            variant_match, variant_score, variant_distance, variant_top_matches = (
+                self.score_features_against_reference(variant_features)
+            )
+            if variant_score > best_score:
+                best_variant = variant_name
+                best_match = variant_match
+                best_score = variant_score
+                best_distance = variant_distance
+                top_matches = variant_top_matches
         
         # Ordenar por score combinado
-        top_matches.sort(key=lambda x: x['combined_score'], reverse=True)
-        
         # Mostrar top 5 coincidencias
-        print("\n🔍 Top 5 coincidencias (normalizadas):")
+        print(f"\n🔍 Top 5 coincidencias (normalizadas, variante: {best_variant}):")
         for i, match in enumerate(top_matches[:5]):
             confidence = max(0, match['combined_score'])
             description = self.get_gesture_description(match['class'])
@@ -647,7 +752,22 @@ def main():
     
     # Procesar dataset
     print("Iniciando procesamiento del dataset...")
-    df = vectorizer.process_dataset(dataset_path, csv_path)
+    # Soportar dataset adicional 'alphabet' dentro de data/kagglehub
+    alphabet_path = vectorizer.project_root / "data" / "kagglehub" / "alphabet"
+    if alphabet_path.exists() and alphabet_path.is_dir():
+        print(f"Se detectó dataset adicional: {alphabet_path}")
+        df1 = vectorizer.process_dataset(dataset_path)
+        df2 = vectorizer.process_dataset(str(alphabet_path))
+        if df1 is None:
+            df = df2
+        elif df2 is None:
+            df = df1
+        else:
+            df = pd.concat([df1, df2], ignore_index=True)
+            # Guardar CSV combinado
+            df.to_csv(vectorizer.resolve_project_path(csv_path), index=False)
+    else:
+        df = vectorizer.process_dataset(dataset_path, csv_path)
     
     print(f"Dataset procesado. Total de imágenes procesadas: {len(df)}")
     print(f"Clases encontradas: {df['class'].unique()}")

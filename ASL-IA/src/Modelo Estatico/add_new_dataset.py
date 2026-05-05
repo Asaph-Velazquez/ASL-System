@@ -178,26 +178,19 @@ class DatasetManager:
             # Solo procesar clases válidas
             if class_name in [str(i) for i in range(10)] + [chr(i) for i in range(97, 123)]:
                 class_data = combined_data[combined_data['class'] == class_name]
-                
-                # Calcular características promedio
-                avg_features = []
-                for i in range(21):  # 21 landmarks
-                    x_avg = class_data[f'landmark_{i}_x'].mean()
-                    y_avg = class_data[f'landmark_{i}_y'].mean()
-                    z_avg = class_data[f'landmark_{i}_z'].mean()
-                    avg_features.extend([x_avg, y_avg, z_avg])
-                
-                # Agregar 5 distancias promedio
-                avg_features.extend([0.1, 0.2, 0.3, 0.4, 0.5])
-                
-                # Asegurar 68 características
-                while len(avg_features) < 68:
-                    avg_features.append(0.0)
-                
-                if len(avg_features) > 68:
-                    avg_features = avg_features[:68]
-                
-                reference_data[class_name] = np.array(avg_features)
+
+                # Generar características reales por fila y promediarlas
+                class_features = []
+                for _, row in class_data.iterrows():
+                    features = self.vectorizer.get_generated_landmark_features(row)
+                    if features is not None:
+                        class_features.append(features)
+
+                if not class_features:
+                    continue
+
+                avg_features = np.mean(class_features, axis=0)
+                reference_data[class_name] = np.asarray(avg_features, dtype=float)
                 valid_classes += 1
         
         # Guardar características de referencia

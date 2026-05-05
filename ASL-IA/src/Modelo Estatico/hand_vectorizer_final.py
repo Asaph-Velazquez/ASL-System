@@ -10,6 +10,7 @@ import mediapipe as mp
 from pathlib import Path
 import pickle
 from hand_vectorizer import HandVectorizer
+from sklearn.cluster import KMeans
 
 class OptimizedHandVectorizer(HandVectorizer):
     """
@@ -22,6 +23,7 @@ class OptimizedHandVectorizer(HandVectorizer):
         self.mp_hands = mp.solutions.hands
         self.mp_drawing = mp.solutions.drawing_utils
         self.project_root = Path(__file__).resolve().parents[2]
+        self.prototypes_per_class = 3
         self.hands = self.mp_hands.Hands(
             static_image_mode=True,
             max_num_hands=2,
@@ -115,71 +117,129 @@ class OptimizedHandVectorizer(HandVectorizer):
         processed_file = self.project_root / "data" / "reference_features_optimized.pkl"
         if dataset_path is None:
             dataset_path = self.project_root / "data" / "kagglehub" / "asl_dataset"
-            
+        # Soportar dataset adicional 'alphabet' dentro de data/kagglehub
+        alphabet_path = self.project_root / "data" / "kagglehub" / "alphabet"
+        
         try:
             with open(processed_file, "rb") as f:
                 self.reference_data = pickle.load(f)
-            self.reference_features = list(self.reference_data.values())
+            self.reference_data = self.normalize_reference_data_structure(self.reference_data)
+            self.reference_features = [prototype for prototypes in self.reference_data.values() for prototype in prototypes]
             self.reference_labels = list(self.reference_data.keys())
             print(f"✅ Dataset cargado con {len(self.reference_features)} clases")
             return
         except FileNotFoundError:
             print("🔄 Procesando dataset para extraer características optimizadas...")
+            # Construir lista de paths a procesar
+            dataset_paths = [Path(dataset_path)]
+            if alphabet_path.exists() and alphabet_path.is_dir():
+                dataset_paths.append(alphabet_path)
             
             self.reference_features, self.reference_labels = self.process_and_save_dataset(
-                dataset_path, processed_file
+                dataset_paths, processed_file
             )
     
-    def process_and_save_dataset(self, dataset_path, output_pkl_path):
+    def process_and_save_dataset(self, dataset_paths, output_pkl_path):
         """
-        Procesa el dataset completo, extrae características y lo guarda en un archivo pkl.
+        Procesa uno o varios paths de dataset completos, extrae características y lo guarda en un archivo pkl.
         """
         self.reference_data = {}
-        dataset_path = Path(dataset_path)
-        
-        # Procesar cada clase
-        for class_folder in dataset_path.iterdir():
-            if class_folder.is_dir():
-                class_name = class_folder.name
-                
-                # Solo procesar clases válidas
-                if class_name in [str(i) for i in range(10)] + [chr(i) for i in range(97, 123)]:
-                    print(f"  Procesando clase: {class_name}")
-                    
-                    class_features = []
-                    
-                    # Procesar imágenes de la clase
-                    for image_file in class_folder.glob("*.jpeg"):
-                        landmarks_data = self.extract_hand_landmarks(str(image_file))
-                        
-                        if landmarks_data and landmarks_data['landmarks']:
-                            features = self.extract_scale_invariant_features(landmarks_data)
-                            if features is not None:
-                                class_features.append(features)
-                    
-                    if class_features:
-                        # Calcular características promedio de la clase
-                        avg_features = np.mean(class_features, axis=0)
-                        self.reference_data[class_name] = avg_features
-                        print(f"    ✅ {len(class_features)} imágenes procesadas")
-                    else:
-                        print(f"    ❌ No se pudieron extraer características")
-        
-        # Guardar características procesadas
+
+        # Aceptar una lista de paths o un solo path
+        if not isinstance(dataset_paths, (list, tuple)):
+            dataset_paths = [Path(dataset_paths)]
+        else:
+            dataset_paths = [Path(p) for p in dataset_paths]
+
+        # Mapear clase -> lista de features (para promediar si aparece en varios datasets)
+        class_features_map = {}
+
+        for dataset_path in dataset_paths:
+            if not dataset_path.exists():
+                print(f"Advertencia: dataset no encontrado: {dataset_path}")
+                continue
+
+            # Procesar cada carpeta de clase dentro del dataset
+            for class_folder in dataset_path.iterdir():
+                if not class_folder.is_dir():
+                    continue
+
+                class_name = class_folder.name.lower()
+                if class_name not in [str(i) for i in range(10)] + [chr(i) for i in range(97, 123)]:
+                    print(f"Ignorando carpeta no válida: {class_folder.name}")
+                    continue
+
+                print(f"  Procesando clase: {class_name} (desde {dataset_path.name})")
+
+                collected = []
+                for image_file in class_folder.glob("*.jpeg"):
+                    landmarks_data = self.extract_hand_landmarks(str(image_file))
+                    if landmarks_data and landmarks_data['landmarks']:
+                        features = self.extract_scale_invariant_features(landmarks_data)
+                        if features is not None:
+                            collected.append(features)
+
+                if collected:
+                    class_features_map.setdefault(class_name, []).extend(collected)
+                    print(f"    ✅ {len(collected)} imágenes procesadas")
+                else:
+                    print(f"    ❌ No se pudieron extraer características en {class_folder}")
+
+        # Construir múltiples prototipos por clase y guardar
+        for class_name, feats in class_features_map.items():
+            self.reference_data[class_name] = self.build_class_prototypes(feats)
+
         print("💾 Guardando características optimizadas...")
         with open(output_pkl_path, 'wb') as f:
             pickle.dump(self.reference_data, f)
-        
+
         print(f"✅ Dataset optimizado cargado con {len(self.reference_data)} clases")
         print(f"📁 Características guardadas en: {output_pkl_path}")
-        
+
         if self.reference_data:
-            self.reference_features = list(self.reference_data.values())
+            self.reference_features = [prototype for prototypes in self.reference_data.values() for prototype in prototypes]
             self.reference_labels = list(self.reference_data.keys())
         else:
             self.reference_features = []
             self.reference_labels = []
         return self.reference_features, self.reference_labels
+
+    def normalize_reference_data_structure(self, reference_data):
+        """
+        Mantiene compatibilidad con PKL antiguos de un solo prototipo por clase.
+        """
+        normalized = {}
+        for class_name, value in reference_data.items():
+            if isinstance(value, list):
+                normalized[class_name] = [np.asarray(prototype, dtype=float) for prototype in value]
+            else:
+                normalized[class_name] = [np.asarray(value, dtype=float)]
+        return normalized
+
+    def build_class_prototypes(self, class_features):
+        """
+        Genera varios centroides por clase para capturar variación intra-clase.
+        """
+        class_features = np.asarray(class_features, dtype=float)
+        num_clusters = min(self.prototypes_per_class, len(class_features))
+
+        if num_clusters <= 1 or len(class_features) < num_clusters * 4:
+            return [np.mean(class_features, axis=0)]
+
+        kmeans = KMeans(
+            n_clusters=num_clusters,
+            random_state=42,
+            n_init=10,
+        )
+        cluster_ids = kmeans.fit_predict(class_features)
+
+        prototypes = []
+        for cluster_id in range(num_clusters):
+            cluster_features = class_features[cluster_ids == cluster_id]
+            if len(cluster_features) > 0:
+                prototypes.append(np.mean(cluster_features, axis=0))
+
+        return prototypes if prototypes else [np.mean(class_features, axis=0)]
     
     def recognize_gesture_optimized(self, landmarks_data):
         """
@@ -191,47 +251,74 @@ class OptimizedHandVectorizer(HandVectorizer):
         if self.reference_data is None:
             return "❌ Dataset no cargado"
         
-        # Extraer características optimizadas
+        feature_variants = []
+
         current_features = self.extract_scale_invariant_features(landmarks_data)
-        if current_features is None:
+        if current_features is not None:
+            feature_variants.append(("original", current_features))
+
+        mirrored_landmarks_data = self.mirror_landmarks_data(landmarks_data)
+        mirrored_features = self.extract_scale_invariant_features(mirrored_landmarks_data)
+        if mirrored_features is not None:
+            feature_variants.append(("mirrored", mirrored_features))
+
+        if not feature_variants:
             return "❌ No se pudieron extraer características"
-        
-        # Comparar con cada clase de referencia
+
+        best_variant = "original"
         best_match = None
         best_score = -1
         top_matches = []
-        
-        for class_name, ref_features in self.reference_data.items():
-            if len(ref_features) == len(current_features):
-                # Calcular similitud de coseno
-                cosine_similarity = np.dot(current_features, ref_features) / (
-                    np.linalg.norm(current_features) * np.linalg.norm(ref_features)
-                )
-                
-                # Calcular correlación
-                correlation = np.corrcoef(current_features, ref_features)[0, 1]
-                if np.isnan(correlation):
-                    correlation = 0
-                
-                # Score combinado
-                combined_score = (cosine_similarity * 0.7 + correlation * 0.3)
-                
-                top_matches.append({
-                    'class': class_name,
-                    'cosine_similarity': cosine_similarity,
-                    'correlation': correlation,
-                    'combined_score': combined_score
-                })
-                
-                if combined_score > best_score:
-                    best_score = combined_score
-                    best_match = class_name
-        
-        # Ordenar por score
-        top_matches.sort(key=lambda x: x['combined_score'], reverse=True)
+
+        for variant_name, variant_features in feature_variants:
+            variant_top_matches = []
+            variant_best_match = None
+            variant_best_score = -1
+
+            for class_name, class_prototypes in self.reference_data.items():
+                best_class_match = None
+
+                for ref_features in class_prototypes:
+                    if len(ref_features) != len(variant_features):
+                        continue
+
+                    denominator = np.linalg.norm(variant_features) * np.linalg.norm(ref_features)
+                    if denominator == 0:
+                        cosine_similarity = 0
+                    else:
+                        cosine_similarity = np.dot(variant_features, ref_features) / denominator
+
+                    correlation = np.corrcoef(variant_features, ref_features)[0, 1]
+                    if np.isnan(correlation):
+                        correlation = 0
+
+                    combined_score = (cosine_similarity * 0.7 + correlation * 0.3)
+
+                    if best_class_match is None or combined_score > best_class_match['combined_score']:
+                        best_class_match = {
+                            'class': class_name,
+                            'cosine_similarity': cosine_similarity,
+                            'correlation': correlation,
+                            'combined_score': combined_score
+                        }
+
+                if best_class_match is not None:
+                    variant_top_matches.append(best_class_match)
+
+                    if best_class_match['combined_score'] > variant_best_score:
+                        variant_best_score = best_class_match['combined_score']
+                        variant_best_match = class_name
+
+            variant_top_matches.sort(key=lambda x: x['combined_score'], reverse=True)
+
+            if variant_best_score > best_score:
+                best_variant = variant_name
+                best_match = variant_best_match
+                best_score = variant_best_score
+                top_matches = variant_top_matches
         
         # Mostrar top 3 coincidencias (menos verbose)
-        print("\n🔍 Top 3 coincidencias:")
+        print(f"\n🔍 Top 3 coincidencias (variante: {best_variant}):")
         for i, match in enumerate(top_matches[:3]):
             confidence = max(0, match['combined_score'])
             description = self.get_gesture_description(match['class'])

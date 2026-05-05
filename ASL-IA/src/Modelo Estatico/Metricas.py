@@ -1,5 +1,7 @@
 import argparse
 import json
+import pickle
+from collections import Counter
 from pathlib import Path
 
 import matplotlib
@@ -7,6 +9,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from clean_dataset import ensure_cleaned_dataset
+from sklearn.cluster import KMeans
 from sklearn.metrics import (
     accuracy_score,
     balanced_accuracy_score,
@@ -23,19 +27,44 @@ from sklearn.preprocessing import label_binarize
 
 
 VALID_CLASSES = [str(i) for i in range(10)] + [chr(i) for i in range(97, 123)]
+DEFAULT_OUTPUT_DIR = "data/Metricas_Estaticas"
 
 
 class StaticModelMetrics:
-    def __init__(self, csv_path: str, output_dir: str, test_size: float, random_state: int):
+    def __init__(
+        self,
+        csv_path: str,
+        output_dir: str,
+        test_size: float,
+        random_state: int,
+        augment_class: str | None = None,
+        augment_factor: int = 0,
+        augment_noise_std: float = 0.008,
+        balance_to_max: bool = False,
+        use_class_weights: bool = True,
+        prototypes_per_class: int = 3,
+    ):
         self.project_root = Path(__file__).resolve().parents[2]
         self.csv_path = self.resolve_project_path(csv_path)
         self.output_dir = self.resolve_project_path(output_dir)
         self.test_size = test_size
         self.random_state = random_state
+        self.augment_class = augment_class.lower() if augment_class else None
+        self.augment_factor = max(0, int(augment_factor))
+        self.augment_noise_std = float(augment_noise_std)
+        self.balance_to_max = balance_to_max
+        self.use_class_weights = use_class_weights
+        self.prototypes_per_class = max(1, int(prototypes_per_class))
 
     def resolve_project_path(self, path_str: str) -> Path:
         path = Path(path_str)
-        return path if path.is_absolute() else self.project_root / path
+        if path.is_absolute():
+            return path
+
+        if path.parts and path.parts[0] == self.project_root.name:
+            return self.project_root.parent / path
+
+        return self.project_root / path
 
     def load_dataset(self) -> pd.DataFrame:
         if not self.csv_path.exists():
@@ -44,6 +73,18 @@ class StaticModelMetrics:
         df = pd.read_csv(self.csv_path)
         df["class"] = df["class"].astype(str).str.lower()
         df = df[df["class"].isin(VALID_CLASSES)].copy()
+
+        # Detectar e integrar dataset 'alphabet' si el caché existe
+        alphabet_cache = self.project_root / "data" / "kagglehub" / "alphabet_landmarks_cache.pkl"
+        if alphabet_cache.exists():
+            print(f"📊 Caché de dataset 'alphabet' detectado")
+            df_alphabet = self._load_alphabet_from_cache(alphabet_cache)
+            if df_alphabet is not None and not df_alphabet.empty:
+                initial_rows = len(df)
+                df = pd.concat([df, df_alphabet], ignore_index=True)
+                df["class"] = df["class"].astype(str).str.lower()
+                df = df[df["class"].isin(VALID_CLASSES)].copy()
+                print(f"   ✅ Dataset principal: {initial_rows} filas, 'alphabet' caché: {len(df_alphabet)} filas, total: {len(df)}")
 
         feature_columns = self.get_feature_columns(df)
         missing_values = df[feature_columns].isna().any(axis=1).sum()
@@ -64,6 +105,16 @@ class StaticModelMetrics:
             raise ValueError("El dataset no contiene suficientes datos válidos para evaluar.")
 
         return df
+
+    def _load_alphabet_from_cache(self, cache_file: Path) -> pd.DataFrame | None:
+        """Carga el caché de landmarks de 'alphabet' desde pickle."""
+        try:
+            with open(cache_file, "rb") as f:
+                df_alphabet = pickle.load(f)
+            return df_alphabet
+        except Exception as e:
+            print(f"⚠️  Error al cargar caché de 'alphabet': {e}")
+            return None
 
     def get_feature_columns(self, df: pd.DataFrame) -> list[str]:
         landmark_columns = []
@@ -117,6 +168,73 @@ class StaticModelMetrics:
     def build_feature_matrix(self, df: pd.DataFrame) -> np.ndarray:
         return np.vstack([self.add_distance_features(row) for _, row in df.iterrows()])
 
+    def augment_row(self, row: pd.Series) -> pd.Series:
+        """
+        Genera una versión ligeramente perturbada de una fila de landmarks.
+        Mantiene la etiqueta original y simula variaciones pequeñas de captura.
+        """
+        augmented = row.copy()
+        landmark_columns = [
+            f"landmark_{i}_{axis}"
+            for i in range(21)
+            for axis in ["x", "y", "z"]
+        ]
+
+        noise = np.random.normal(0.0, self.augment_noise_std, size=len(landmark_columns))
+        values = augmented[landmark_columns].astype(float).to_numpy() + noise
+
+        # Pequeño sesgo específico para que la clase 'm' deje de parecerse tanto a 'e'/'o'
+        if str(augmented.get("class", "")).lower() == "m":
+            for idx in [8, 12, 16, 20]:
+                values[idx * 3 + 1] *= 0.995  # y ligeramente más estable
+                values[idx * 3 + 2] *= 1.005  # z ligeramente más abierto
+
+        augmented[landmark_columns] = values
+        return augmented
+
+    def build_augmented_training_set(self, df: pd.DataFrame):
+        """
+        Construye el conjunto de entrenamiento con balanceo opcional y augmentación focalizada.
+        """
+        working_df = df.copy().reset_index(drop=True)
+
+        if self.balance_to_max or (self.augment_class and self.augment_factor > 0):
+            class_counts = working_df["class"].value_counts().to_dict()
+            target_counts = class_counts.copy()
+
+            if self.balance_to_max and class_counts:
+                max_count = max(class_counts.values())
+                for class_name in class_counts:
+                    target_counts[class_name] = max_count
+
+            if self.augment_class and self.augment_factor > 0:
+                target_counts[self.augment_class] = max(
+                    target_counts.get(self.augment_class, 0),
+                    class_counts.get(self.augment_class, 0) * (self.augment_factor + 1),
+                )
+
+            augmented_rows = []
+            for class_name, target_count in target_counts.items():
+                class_rows = working_df[working_df["class"] == class_name]
+                current_count = len(class_rows)
+                if current_count == 0 or current_count >= target_count:
+                    continue
+
+                needed = target_count - current_count
+                class_indices = class_rows.index.to_list()
+                for i in range(needed):
+                    base_row = working_df.loc[class_indices[i % len(class_indices)]]
+                    new_row = self.augment_row(base_row)
+                    new_row["class"] = class_name
+                    augmented_rows.append(new_row)
+
+            if augmented_rows:
+                working_df = pd.concat([working_df, pd.DataFrame(augmented_rows)], ignore_index=True)
+
+        X = self.build_feature_matrix(working_df)
+        y = working_df["class"].astype(str).to_numpy()
+        return working_df, X, y
+
     def split_dataset(self, X: np.ndarray, y: np.ndarray):
         splitter = StratifiedShuffleSplit(
             n_splits=1,
@@ -126,41 +244,90 @@ class StaticModelMetrics:
         train_idx, test_idx = next(splitter.split(X, y))
         return X[train_idx], X[test_idx], y[train_idx], y[test_idx], train_idx, test_idx
 
-    def build_prototypes(self, X_train: np.ndarray, y_train: np.ndarray):
+    def compute_weighted_mean(
+        self,
+        class_features: np.ndarray,
+        class_weights: np.ndarray | None = None,
+    ) -> np.ndarray:
+        if class_weights is not None and np.sum(class_weights) > 0:
+            return np.average(class_features, axis=0, weights=class_weights)
+        return np.mean(class_features, axis=0)
+
+    def build_prototypes(self, X_train: np.ndarray, y_train: np.ndarray, sample_weights: np.ndarray | None = None):
         prototypes = {}
         for class_name in sorted(np.unique(y_train)):
-            class_features = X_train[y_train == class_name]
-            prototypes[class_name] = np.mean(class_features, axis=0)
+            class_mask = y_train == class_name
+            class_features = X_train[class_mask]
+            class_w = np.asarray(sample_weights)[class_mask] if sample_weights is not None else None
+            num_clusters = min(self.prototypes_per_class, len(class_features))
+
+            if num_clusters <= 1 or len(class_features) < num_clusters * 4:
+                prototypes[class_name] = [self.compute_weighted_mean(class_features, class_w)]
+                continue
+
+            kmeans = KMeans(
+                n_clusters=num_clusters,
+                random_state=self.random_state,
+                n_init=10,
+            )
+            cluster_ids = kmeans.fit_predict(class_features)
+
+            class_prototypes = []
+            for cluster_id in range(num_clusters):
+                cluster_mask = cluster_ids == cluster_id
+                cluster_features = class_features[cluster_mask]
+                cluster_weights = class_w[cluster_mask] if class_w is not None else None
+                class_prototypes.append(
+                    self.compute_weighted_mean(cluster_features, cluster_weights)
+                )
+
+            prototypes[class_name] = class_prototypes
         return prototypes
 
-    def score_sample(self, sample: np.ndarray, prototypes: dict[str, np.ndarray]):
+    def compute_sample_weights(self, y_train: np.ndarray) -> np.ndarray | None:
+        if not self.use_class_weights:
+            return None
+
+        counts = Counter(y_train.tolist())
+        num_classes = len(counts)
+        total = len(y_train)
+        weights = {class_name: total / (num_classes * count) for class_name, count in counts.items() if count > 0}
+        return np.asarray([weights[label] for label in y_train], dtype=float)
+
+    def score_sample(self, sample: np.ndarray, prototypes: dict[str, list[np.ndarray]]):
         sample_normalized = self.normalize_features(sample)
         scores = {}
 
-        for class_name, prototype in prototypes.items():
-            prototype_normalized = self.normalize_features(prototype)
+        for class_name, class_prototypes in prototypes.items():
+            best_class_score = -np.inf
 
-            sample_norm = np.linalg.norm(sample_normalized)
-            prototype_norm = np.linalg.norm(prototype_normalized)
-            cosine_similarity = 0.0
-            if sample_norm != 0 and prototype_norm != 0:
-                cosine_similarity = float(
-                    np.dot(sample_normalized, prototype_normalized) / (sample_norm * prototype_norm)
+            for prototype in class_prototypes:
+                prototype_normalized = self.normalize_features(prototype)
+
+                sample_norm = np.linalg.norm(sample_normalized)
+                prototype_norm = np.linalg.norm(prototype_normalized)
+                cosine_similarity = 0.0
+                if sample_norm != 0 and prototype_norm != 0:
+                    cosine_similarity = float(
+                        np.dot(sample_normalized, prototype_normalized) / (sample_norm * prototype_norm)
+                    )
+
+                correlation = np.corrcoef(sample_normalized, prototype_normalized)[0, 1]
+                if np.isnan(correlation):
+                    correlation = 0.0
+
+                euclidean_distance = float(
+                    np.linalg.norm(sample_normalized - prototype_normalized)
                 )
+                combined_score = (
+                    cosine_similarity * 0.4
+                    + correlation * 0.4
+                    + (1 - euclidean_distance / 10) * 0.2
+                )
+                if combined_score > best_class_score:
+                    best_class_score = combined_score
 
-            correlation = np.corrcoef(sample_normalized, prototype_normalized)[0, 1]
-            if np.isnan(correlation):
-                correlation = 0.0
-
-            euclidean_distance = float(
-                np.linalg.norm(sample_normalized - prototype_normalized)
-            )
-            combined_score = (
-                cosine_similarity * 0.4
-                + correlation * 0.4
-                + (1 - euclidean_distance / 10) * 0.2
-            )
-            scores[class_name] = combined_score
+            scores[class_name] = best_class_score
 
         ordered_labels = sorted(scores)
         raw_scores = np.array([scores[label] for label in ordered_labels], dtype=float)
@@ -176,11 +343,11 @@ class StaticModelMetrics:
 
     def evaluate(self) -> dict:
         df = self.load_dataset()
-        X = self.build_feature_matrix(df)
-        y = df["class"].to_numpy()
+        working_df, X, y = self.build_augmented_training_set(df)
 
         X_train, X_test, y_train, y_test, train_idx, test_idx = self.split_dataset(X, y)
-        prototypes = self.build_prototypes(X_train, y_train)
+        sample_weights = self.compute_sample_weights(y_train)
+        prototypes = self.build_prototypes(X_train, y_train, sample_weights=sample_weights)
         class_labels = sorted(prototypes.keys())
 
         y_pred = []
@@ -206,6 +373,7 @@ class StaticModelMetrics:
 
         metrics_summary = {
             "num_samples_total": int(len(df)),
+            "num_samples_total_augmented": int(len(working_df)),
             "num_samples_train": int(len(y_train)),
             "num_samples_test": int(len(y_test)),
             "num_classes": int(len(class_labels)),
@@ -228,6 +396,12 @@ class StaticModelMetrics:
                 f1_score(y_test, y_pred, average="weighted", zero_division=0)
             ),
             "top_3_accuracy": float(top3_hits / len(y_test)),
+            "augment_class": self.augment_class,
+            "augment_factor": int(self.augment_factor),
+            "augment_noise_std": float(self.augment_noise_std),
+            "balance_to_max": bool(self.balance_to_max),
+            "use_class_weights": bool(self.use_class_weights),
+            "prototypes_per_class": int(self.prototypes_per_class),
         }
 
         try:
@@ -274,9 +448,9 @@ class StaticModelMetrics:
             }
         )
 
-        source_columns = [col for col in ["image_path", "image_name"] if col in df.columns]
+        source_columns = [col for col in ["image_path", "image_name"] if col in working_df.columns]
         if source_columns:
-            source_df = df.iloc[test_idx][source_columns].reset_index(drop=True)
+            source_df = working_df.iloc[test_idx][source_columns].reset_index(drop=True)
             prediction_df = pd.concat([prediction_df.reset_index(drop=True), source_df], axis=1)
 
         score_columns = pd.DataFrame(y_scores, columns=[f"score_{label}" for label in class_labels])
@@ -489,9 +663,15 @@ class StaticModelMetrics:
         print("\n📊 MÉTRICAS DEL MODELO ESTÁTICO")
         print("=" * 60)
         print(f"Muestras totales: {summary['num_samples_total']}")
+        print(f"Muestras totales tras augmentación: {summary['num_samples_total_augmented']}")
         print(f"Muestras entrenamiento: {summary['num_samples_train']}")
         print(f"Muestras prueba: {summary['num_samples_test']}")
         print(f"Clases evaluadas: {summary['num_classes']}")
+        if summary.get("augment_class"):
+            print(f"Augmentación focalizada: {summary['augment_class']} x{summary['augment_factor']}")
+        print(f"Balanceo a máximo: {summary['balance_to_max']}")
+        print(f"Pesos por clase: {summary['use_class_weights']}")
+        print(f"Protótipos por clase: {summary['prototypes_per_class']}")
         print("-" * 60)
         print(f"Accuracy:           {summary['accuracy']:.4f}")
         print(f"Balanced Accuracy:  {summary['balanced_accuracy']:.4f}")
@@ -511,6 +691,14 @@ class StaticModelMetrics:
         print("-" * 60)
         print(f"Archivos generados en: {self.output_dir}")
 
+    def ensure_output_dir_name(self):
+        """
+        Si el directorio de salida no fue personalizado, fuerza el nombre estándar.
+        """
+        default_path = self.resolve_project_path(DEFAULT_OUTPUT_DIR)
+        if self.output_dir == self.resolve_project_path("data/metricas_modelo_estatico"):
+            self.output_dir = default_path
+
 
 def build_parser():
     parser = argparse.ArgumentParser(
@@ -518,12 +706,34 @@ def build_parser():
     )
     parser.add_argument(
         "--csv",
+        default="data/hand_landmarks_dataset_cleaned.csv",
+        help="Ruta al CSV de landmarks (limpio) del modelo estático.",
+    )
+    parser.add_argument(
+        "--raw-csv",
         default="data/hand_landmarks_dataset_corrected.csv",
-        help="Ruta al CSV de landmarks del modelo estático.",
+        help="CSV origen para generar el CSV limpio si no existe.",
+    )
+    parser.add_argument(
+        "--min-count",
+        type=int,
+        default=2,
+        help="Mínimo de muestras por clase para mantener la clase.",
+    )
+    parser.add_argument(
+        "--outlier-multiplier",
+        type=float,
+        default=1.5,
+        help="Multiplicador IQR para detección de outliers.",
+    )
+    parser.add_argument(
+        "--normalize",
+        action="store_true",
+        help="Si se pasa, normaliza columnas de landmarks en el CSV limpio.",
     )
     parser.add_argument(
         "--output-dir",
-        default="data/metricas_modelo_estatico",
+        default=DEFAULT_OUTPUT_DIR,
         help="Directorio donde se guardarán las métricas y matrices.",
     )
     parser.add_argument(
@@ -538,17 +748,82 @@ def build_parser():
         default=42,
         help="Semilla para hacer reproducible la partición train/test.",
     )
+    parser.add_argument(
+        "--augment-class",
+        default="m",
+        help="Clase a reforzar con augmentación focalizada. Usa vacío para desactivar.",
+    )
+    parser.add_argument(
+        "--augment-factor",
+        type=int,
+        default=4,
+        help="Cantidad de muestras sintéticas extra por muestra original de la clase objetivo.",
+    )
+    parser.add_argument(
+        "--augment-noise-std",
+        type=float,
+        default=0.008,
+        help="Desviación estándar del ruido gaussiano aplicado a los landmarks durante augmentación.",
+    )
+    parser.add_argument(
+        "--balance-to-max",
+        action="store_true",
+        help="Iguala todas las clases al tamaño de la clase mayor mediante augmentación.",
+    )
+    parser.add_argument(
+        "--no-class-weights",
+        action="store_true",
+        help="Desactiva los pesos por clase al construir prototipos.",
+    )
+    parser.add_argument(
+        "--prototypes-per-class",
+        type=int,
+        default=3,
+        help="Número máximo de centroides por clase para capturar variaciones intra-clase.",
+    )
     return parser
 
 
 def main():
     args = build_parser().parse_args()
+
+    # Si el CSV limpio no existe, generarlo a partir del CSV corregido
+    project_root = Path(__file__).resolve().parents[2]
+
+    def resolve_main_path(path_str: str) -> Path:
+        path = Path(path_str)
+        if path.is_absolute():
+            return path
+        if path.parts and path.parts[0] == project_root.name:
+            return project_root.parent / path
+        return project_root / path
+
+    csv_path = resolve_main_path(args.csv)
+    raw_csv_path = resolve_main_path(args.raw_csv)
+
+    if not csv_path.exists():
+        print(f"CSV limpio {csv_path} no encontrado. Generando desde {raw_csv_path}...")
+        ensure_cleaned_dataset(
+            raw_csv=str(raw_csv_path),
+            output_csv=str(csv_path),
+            min_count=args.min_count,
+            outlier_multiplier=args.outlier_multiplier,
+            normalize=args.normalize,
+        )
+
     evaluator = StaticModelMetrics(
-        csv_path=args.csv,
+        csv_path=str(csv_path),
         output_dir=args.output_dir,
         test_size=args.test_size,
         random_state=args.random_state,
+        augment_class=args.augment_class.strip() or None,
+        augment_factor=args.augment_factor,
+        augment_noise_std=args.augment_noise_std,
+        balance_to_max=args.balance_to_max,
+        use_class_weights=not args.no_class_weights,
+        prototypes_per_class=args.prototypes_per_class,
     )
+    evaluator.ensure_output_dir_name()
     results = evaluator.evaluate()
     evaluator.print_summary(results)
 
