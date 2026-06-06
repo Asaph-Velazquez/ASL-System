@@ -12,6 +12,13 @@ import pickle
 from hand_vectorizer import HandVectorizer
 from sklearn.cluster import KMeans
 
+AMBIGUOUS_CLASS_GROUPS = [
+    frozenset({"a", "e", "o", "s", "m", "n"}),
+    frozenset({"r", "u", "v", "k"}),
+    frozenset({"x", "y", "z"}),
+    frozenset({"p", "q"}),
+]
+
 class OptimizedHandVectorizer(HandVectorizer):
     """
     Vectorizador de manos optimizado con normalización robusta
@@ -42,9 +49,9 @@ class OptimizedHandVectorizer(HandVectorizer):
         """
         features = np.array(features)
         
-        # 1. Separar coordenadas de landmarks (63) y distancias (5)
+        # 1. Separar coordenadas de landmarks (63) y rasgos geométricos extra
         landmark_coords = features[:63]  # x,y,z de 21 landmarks
-        distances = features[63:68] if len(features) >= 68 else features[63:]
+        distances = features[63:] if len(features) > 63 else np.array([])
         
         # 2. Normalizar coordenadas de landmarks por escala
         # Reshape a (21, 3) para procesar cada landmark
@@ -80,13 +87,6 @@ class OptimizedHandVectorizer(HandVectorizer):
             normalized_landmarks.flatten(),
             normalized_distances
         ])
-        
-        # 5. Asegurar que siempre tengamos 68 características
-        while len(normalized_features) < 68:
-            normalized_features = np.append(normalized_features, 0.0)
-        
-        if len(normalized_features) > 68:
-            normalized_features = normalized_features[:68]
         
         return normalized_features
     
@@ -240,6 +240,73 @@ class OptimizedHandVectorizer(HandVectorizer):
                 prototypes.append(np.mean(cluster_features, axis=0))
 
         return prototypes if prototypes else [np.mean(class_features, axis=0)]
+
+    def fast_correlation(self, x, y):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+
+        x_centered = x - np.mean(x)
+        y_centered = y - np.mean(y)
+        denominator = np.linalg.norm(x_centered) * np.linalg.norm(y_centered)
+        if denominator == 0:
+            return 0.0
+
+        correlation = float(np.dot(x_centered, y_centered) / denominator)
+        if np.isnan(correlation):
+            return 0.0
+        return correlation
+
+    def compute_similarity_components(self, sample_features, prototype_features):
+        denominator = np.linalg.norm(sample_features) * np.linalg.norm(prototype_features)
+        if denominator == 0:
+            cosine_similarity = 0.0
+        else:
+            cosine_similarity = float(np.dot(sample_features, prototype_features) / denominator)
+
+        correlation = self.fast_correlation(sample_features, prototype_features)
+
+        geometry_sample = sample_features[63:] if len(sample_features) > 63 else np.array([], dtype=float)
+        geometry_prototype = prototype_features[63:] if len(prototype_features) > 63 else np.array([], dtype=float)
+
+        geometry_cosine = 0.0
+        geometry_correlation = 0.0
+        geometry_distance = float(np.linalg.norm(sample_features - prototype_features))
+        if len(geometry_sample) > 0 and len(geometry_sample) == len(geometry_prototype):
+            geometry_denominator = np.linalg.norm(geometry_sample) * np.linalg.norm(geometry_prototype)
+            if geometry_denominator != 0:
+                geometry_cosine = float(
+                    np.dot(geometry_sample, geometry_prototype) / geometry_denominator
+                )
+            geometry_correlation = self.fast_correlation(geometry_sample, geometry_prototype)
+            geometry_distance = float(np.linalg.norm(geometry_sample - geometry_prototype))
+
+        return {
+            "cosine_similarity": cosine_similarity,
+            "correlation": correlation,
+            "geometry_cosine": geometry_cosine,
+            "geometry_correlation": geometry_correlation,
+            "geometry_distance": geometry_distance,
+        }
+
+    def combine_score(self, components, emphasize_geometry=False):
+        if emphasize_geometry:
+            return (
+                components["cosine_similarity"] * 0.30
+                + components["correlation"] * 0.20
+                + components["geometry_cosine"] * 0.25
+                + components["geometry_correlation"] * 0.15
+                + (1 - components["geometry_distance"] / 5) * 0.10
+            )
+
+        return components["cosine_similarity"] * 0.7 + components["correlation"] * 0.3
+
+    def find_ambiguous_group(self, ranked_labels):
+        top_labels = ranked_labels[: min(3, len(ranked_labels))]
+        for group in AMBIGUOUS_CLASS_GROUPS:
+            overlapping = [label for label in top_labels if label in group]
+            if len(overlapping) >= 2:
+                return group
+        return None
     
     def recognize_gesture_optimized(self, landmarks_data):
         """
@@ -282,23 +349,17 @@ class OptimizedHandVectorizer(HandVectorizer):
                     if len(ref_features) != len(variant_features):
                         continue
 
-                    denominator = np.linalg.norm(variant_features) * np.linalg.norm(ref_features)
-                    if denominator == 0:
-                        cosine_similarity = 0
-                    else:
-                        cosine_similarity = np.dot(variant_features, ref_features) / denominator
-
-                    correlation = np.corrcoef(variant_features, ref_features)[0, 1]
-                    if np.isnan(correlation):
-                        correlation = 0
-
-                    combined_score = (cosine_similarity * 0.7 + correlation * 0.3)
+                    components = self.compute_similarity_components(
+                        variant_features,
+                        ref_features,
+                    )
+                    combined_score = self.combine_score(components)
 
                     if best_class_match is None or combined_score > best_class_match['combined_score']:
                         best_class_match = {
                             'class': class_name,
-                            'cosine_similarity': cosine_similarity,
-                            'correlation': correlation,
+                            'cosine_similarity': components['cosine_similarity'],
+                            'correlation': components['correlation'],
                             'combined_score': combined_score
                         }
 
@@ -310,6 +371,41 @@ class OptimizedHandVectorizer(HandVectorizer):
                         variant_best_match = class_name
 
             variant_top_matches.sort(key=lambda x: x['combined_score'], reverse=True)
+
+            ambiguous_group = self.find_ambiguous_group(
+                [match['class'] for match in variant_top_matches]
+            )
+            if ambiguous_group is not None:
+                for match in variant_top_matches:
+                    if match['class'] not in ambiguous_group:
+                        continue
+
+                    refined_best = None
+                    for ref_features in self.reference_data.get(match['class'], []):
+                        if len(ref_features) != len(variant_features):
+                            continue
+
+                        components = self.compute_similarity_components(
+                            variant_features,
+                            ref_features,
+                        )
+                        refined_score = self.combine_score(components, emphasize_geometry=True)
+                        if refined_best is None or refined_score > refined_best['combined_score']:
+                            refined_best = {
+                                'class': match['class'],
+                                'cosine_similarity': components['cosine_similarity'],
+                                'correlation': components['correlation'],
+                                'combined_score': refined_score,
+                            }
+
+                    if refined_best is not None:
+                        match.update(refined_best)
+
+                variant_top_matches.sort(key=lambda x: x['combined_score'], reverse=True)
+
+            if variant_top_matches:
+                variant_best_score = variant_top_matches[0]['combined_score']
+                variant_best_match = variant_top_matches[0]['class']
 
             if variant_best_score > best_score:
                 best_variant = variant_name

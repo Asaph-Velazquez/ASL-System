@@ -28,6 +28,12 @@ from sklearn.preprocessing import label_binarize
 
 VALID_CLASSES = [str(i) for i in range(10)] + [chr(i) for i in range(97, 123)]
 DEFAULT_OUTPUT_DIR = "data/Metricas_Estaticas"
+AMBIGUOUS_CLASS_GROUPS = [
+    frozenset({"a", "e", "o", "s", "m", "n"}),
+    frozenset({"r", "u", "v", "k"}),
+    frozenset({"x", "y", "z"}),
+    frozenset({"p", "q"}),
+]
 
 
 class StaticModelMetrics:
@@ -144,6 +150,93 @@ class StaticModelMetrics:
         normalized = (features - median) / mad
         return np.clip(normalized, -3, 3)
 
+    def fast_correlation(self, x: np.ndarray, y: np.ndarray) -> float:
+        """
+        Correlación de Pearson optimizada para el bucle interno de scoring.
+        Evita el costo elevado de np.corrcoef por comparación.
+        """
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+
+        x_centered = x - np.mean(x)
+        y_centered = y - np.mean(y)
+
+        denominator = np.linalg.norm(x_centered) * np.linalg.norm(y_centered)
+        if denominator == 0:
+            return 0.0
+
+        correlation = float(np.dot(x_centered, y_centered) / denominator)
+        if np.isnan(correlation):
+            return 0.0
+        return correlation
+
+    def compute_similarity_components(
+        self,
+        sample_normalized: np.ndarray,
+        prototype_normalized: np.ndarray,
+    ) -> dict[str, float]:
+        sample_norm = np.linalg.norm(sample_normalized)
+        prototype_norm = np.linalg.norm(prototype_normalized)
+
+        cosine_similarity = 0.0
+        if sample_norm != 0 and prototype_norm != 0:
+            cosine_similarity = float(
+                np.dot(sample_normalized, prototype_normalized) / (sample_norm * prototype_norm)
+            )
+
+        correlation = self.fast_correlation(sample_normalized, prototype_normalized)
+        euclidean_distance = float(np.linalg.norm(sample_normalized - prototype_normalized))
+
+        geometry_sample = sample_normalized[63:] if len(sample_normalized) > 63 else np.array([], dtype=float)
+        geometry_prototype = prototype_normalized[63:] if len(prototype_normalized) > 63 else np.array([], dtype=float)
+
+        geometry_cosine = 0.0
+        geometry_correlation = 0.0
+        geometry_distance = euclidean_distance
+        if len(geometry_sample) > 0 and len(geometry_sample) == len(geometry_prototype):
+            geometry_sample_norm = np.linalg.norm(geometry_sample)
+            geometry_prototype_norm = np.linalg.norm(geometry_prototype)
+            if geometry_sample_norm != 0 and geometry_prototype_norm != 0:
+                geometry_cosine = float(
+                    np.dot(geometry_sample, geometry_prototype)
+                    / (geometry_sample_norm * geometry_prototype_norm)
+                )
+            geometry_correlation = self.fast_correlation(geometry_sample, geometry_prototype)
+            geometry_distance = float(np.linalg.norm(geometry_sample - geometry_prototype))
+
+        return {
+            "cosine_similarity": cosine_similarity,
+            "correlation": correlation,
+            "euclidean_distance": euclidean_distance,
+            "geometry_cosine": geometry_cosine,
+            "geometry_correlation": geometry_correlation,
+            "geometry_distance": geometry_distance,
+        }
+
+    def combine_score(self, components: dict[str, float], emphasize_geometry: bool = False) -> float:
+        if emphasize_geometry:
+            return (
+                components["cosine_similarity"] * 0.30
+                + components["correlation"] * 0.20
+                + components["geometry_cosine"] * 0.25
+                + components["geometry_correlation"] * 0.15
+                + (1 - components["geometry_distance"] / 5) * 0.10
+            )
+
+        return (
+            components["cosine_similarity"] * 0.4
+            + components["correlation"] * 0.4
+            + (1 - components["euclidean_distance"] / 10) * 0.2
+        )
+
+    def find_ambiguous_group(self, ranked_labels: list[str]) -> frozenset[str] | None:
+        top_labels = ranked_labels[: min(3, len(ranked_labels))]
+        for group in AMBIGUOUS_CLASS_GROUPS:
+            overlapping = [label for label in top_labels if label in group]
+            if len(overlapping) >= 2:
+                return group
+        return None
+
     def add_distance_features(self, row: pd.Series) -> np.ndarray:
         landmarks = []
         for i in range(21):
@@ -160,10 +253,20 @@ class StaticModelMetrics:
 
         wrist = landmarks[0]
         fingertip_indices = [4, 8, 12, 16, 20]
-        distances = [np.linalg.norm(wrist - landmarks[idx]) for idx in fingertip_indices]
-        features.extend(distances)
+        fingertip_distances = [np.linalg.norm(wrist - landmarks[idx]) for idx in fingertip_indices]
 
-        return np.asarray(features[:68], dtype=float)
+        consecutive_tip_pairs = [(4, 8), (8, 12), (12, 16), (16, 20)]
+        consecutive_tip_distances = [
+            np.linalg.norm(landmarks[a] - landmarks[b]) for a, b in consecutive_tip_pairs
+        ]
+
+        palm_span = np.linalg.norm(landmarks[5] - landmarks[17])
+
+        features.extend(fingertip_distances)
+        features.extend(consecutive_tip_distances)
+        features.append(palm_span)
+
+        return np.asarray(features, dtype=float)
 
     def build_feature_matrix(self, df: pd.DataFrame) -> np.ndarray:
         return np.vstack([self.add_distance_features(row) for _, row in df.iterrows()])
@@ -303,31 +406,37 @@ class StaticModelMetrics:
 
             for prototype in class_prototypes:
                 prototype_normalized = self.normalize_features(prototype)
-
-                sample_norm = np.linalg.norm(sample_normalized)
-                prototype_norm = np.linalg.norm(prototype_normalized)
-                cosine_similarity = 0.0
-                if sample_norm != 0 and prototype_norm != 0:
-                    cosine_similarity = float(
-                        np.dot(sample_normalized, prototype_normalized) / (sample_norm * prototype_norm)
-                    )
-
-                correlation = np.corrcoef(sample_normalized, prototype_normalized)[0, 1]
-                if np.isnan(correlation):
-                    correlation = 0.0
-
-                euclidean_distance = float(
-                    np.linalg.norm(sample_normalized - prototype_normalized)
+                components = self.compute_similarity_components(
+                    sample_normalized,
+                    prototype_normalized,
                 )
-                combined_score = (
-                    cosine_similarity * 0.4
-                    + correlation * 0.4
-                    + (1 - euclidean_distance / 10) * 0.2
-                )
+                combined_score = self.combine_score(components)
                 if combined_score > best_class_score:
                     best_class_score = combined_score
 
             scores[class_name] = best_class_score
+
+        ranked_by_score = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        ambiguous_group = self.find_ambiguous_group([label for label, _ in ranked_by_score])
+        if ambiguous_group is not None:
+            for class_name in ambiguous_group:
+                class_prototypes = prototypes.get(class_name)
+                if not class_prototypes:
+                    continue
+
+                best_refined_score = -np.inf
+                for prototype in class_prototypes:
+                    prototype_normalized = self.normalize_features(prototype)
+                    components = self.compute_similarity_components(
+                        sample_normalized,
+                        prototype_normalized,
+                    )
+                    refined_score = self.combine_score(components, emphasize_geometry=True)
+                    if refined_score > best_refined_score:
+                        best_refined_score = refined_score
+
+                if best_refined_score > -np.inf:
+                    scores[class_name] = best_refined_score
 
         ordered_labels = sorted(scores)
         raw_scores = np.array([scores[label] for label in ordered_labels], dtype=float)
@@ -341,20 +450,17 @@ class StaticModelMetrics:
         exp_scores = np.exp(scores)
         return exp_scores / np.sum(exp_scores)
 
-    def evaluate(self) -> dict:
-        df = self.load_dataset()
-        working_df, X, y = self.build_augmented_training_set(df)
-
-        X_train, X_test, y_train, y_test, train_idx, test_idx = self.split_dataset(X, y)
-        sample_weights = self.compute_sample_weights(y_train)
-        prototypes = self.build_prototypes(X_train, y_train, sample_weights=sample_weights)
-        class_labels = sorted(prototypes.keys())
-
+    def predict_dataset(
+        self,
+        X_split: np.ndarray,
+        y_split: np.ndarray,
+        prototypes: dict[str, list[np.ndarray]],
+    ):
         y_pred = []
         y_scores = []
         top3_hits = 0
 
-        for sample, true_label in zip(X_test, y_test):
+        for sample, true_label in zip(X_split, y_split):
             predicted_label, ordered_labels, _, probabilities = self.score_sample(sample, prototypes)
             y_pred.append(predicted_label)
             y_scores.append(probabilities)
@@ -366,8 +472,43 @@ class StaticModelMetrics:
             if true_label in ranked_labels:
                 top3_hits += 1
 
-        y_pred = np.asarray(y_pred)
-        y_scores = np.vstack(y_scores)
+        return np.asarray(y_pred), np.vstack(y_scores), float(top3_hits / len(y_split))
+
+    def build_confusion_outputs(
+        self,
+        y_true: np.ndarray,
+        y_pred: np.ndarray,
+        class_labels: list[str],
+    ):
+        confusion = confusion_matrix(y_true, y_pred, labels=class_labels)
+        confusion_df = pd.DataFrame(confusion, index=class_labels, columns=class_labels)
+
+        confusion_normalized = confusion.astype(float)
+        row_sums = confusion_normalized.sum(axis=1, keepdims=True)
+        np.divide(
+            confusion_normalized,
+            row_sums,
+            out=confusion_normalized,
+            where=row_sums != 0,
+        )
+        confusion_normalized_df = pd.DataFrame(
+            confusion_normalized,
+            index=class_labels,
+            columns=class_labels,
+        )
+        return confusion_df, confusion_normalized_df
+
+    def evaluate(self) -> dict:
+        df = self.load_dataset()
+        working_df, X, y = self.build_augmented_training_set(df)
+
+        X_train, X_test, y_train, y_test, train_idx, test_idx = self.split_dataset(X, y)
+        sample_weights = self.compute_sample_weights(y_train)
+        prototypes = self.build_prototypes(X_train, y_train, sample_weights=sample_weights)
+        class_labels = sorted(prototypes.keys())
+
+        y_train_pred, y_train_scores, train_top3_hits = self.predict_dataset(X_train, y_train, prototypes)
+        y_pred, y_scores, top3_hits = self.predict_dataset(X_test, y_test, prototypes)
 
         y_test_bin = label_binarize(y_test, classes=class_labels)
 
@@ -377,6 +518,8 @@ class StaticModelMetrics:
             "num_samples_train": int(len(y_train)),
             "num_samples_test": int(len(y_test)),
             "num_classes": int(len(class_labels)),
+            "train_accuracy": float(accuracy_score(y_train, y_train_pred)),
+            "train_balanced_accuracy": float(balanced_accuracy_score(y_train, y_train_pred)),
             "accuracy": float(accuracy_score(y_test, y_pred)),
             "balanced_accuracy": float(balanced_accuracy_score(y_test, y_pred)),
             "precision_macro": float(
@@ -395,7 +538,8 @@ class StaticModelMetrics:
             "f1_weighted": float(
                 f1_score(y_test, y_pred, average="weighted", zero_division=0)
             ),
-            "top_3_accuracy": float(top3_hits / len(y_test)),
+            "top_3_accuracy": float(top3_hits),
+            "train_top_3_accuracy": float(train_top3_hits),
             "augment_class": self.augment_class,
             "augment_factor": int(self.augment_factor),
             "augment_noise_std": float(self.augment_noise_std),
@@ -423,20 +567,11 @@ class StaticModelMetrics:
         )
         report_df = pd.DataFrame(report).transpose()
 
-        confusion = confusion_matrix(y_test, y_pred, labels=class_labels)
-        confusion_df = pd.DataFrame(confusion, index=class_labels, columns=class_labels)
-        confusion_normalized = confusion.astype(float)
-        row_sums = confusion_normalized.sum(axis=1, keepdims=True)
-        np.divide(
-            confusion_normalized,
-            row_sums,
-            out=confusion_normalized,
-            where=row_sums != 0,
+        train_confusion_df, train_confusion_normalized_df = self.build_confusion_outputs(
+            y_train, y_train_pred, class_labels
         )
-        confusion_normalized_df = pd.DataFrame(
-            confusion_normalized,
-            index=class_labels,
-            columns=class_labels,
+        confusion_df, confusion_normalized_df = self.build_confusion_outputs(
+            y_test, y_pred, class_labels
         )
 
         prediction_df = pd.DataFrame(
@@ -462,17 +597,31 @@ class StaticModelMetrics:
             encoding="utf-8",
         )
         report_df.to_csv(self.output_dir / "metricas_por_clase.csv", encoding="utf-8")
+        train_confusion_df.to_csv(self.output_dir / "matriz_confusion_train.csv", encoding="utf-8")
+        train_confusion_normalized_df.to_csv(
+            self.output_dir / "matriz_confusion_train_normalizada.csv",
+            encoding="utf-8",
+        )
         confusion_df.to_csv(self.output_dir / "matriz_confusion.csv", encoding="utf-8")
         confusion_normalized_df.to_csv(
             self.output_dir / "matriz_confusion_normalizada.csv",
             encoding="utf-8",
         )
         prediction_df.to_csv(self.output_dir / "predicciones_detalladas.csv", index=False, encoding="utf-8")
-        self.save_plots(metrics_summary, report_df, confusion_df, confusion_normalized_df)
+        self.save_plots(
+            metrics_summary,
+            report_df,
+            train_confusion_df,
+            train_confusion_normalized_df,
+            confusion_df,
+            confusion_normalized_df,
+        )
 
         return {
             "summary": metrics_summary,
             "report_df": report_df,
+            "train_confusion_df": train_confusion_df,
+            "train_confusion_normalized_df": train_confusion_normalized_df,
             "confusion_df": confusion_df,
             "confusion_normalized_df": confusion_normalized_df,
         }
@@ -524,19 +673,46 @@ class StaticModelMetrics:
         self,
         metrics_summary: dict,
         report_df: pd.DataFrame,
+        train_confusion_df: pd.DataFrame,
+        train_confusion_normalized_df: pd.DataFrame,
         confusion_df: pd.DataFrame,
         confusion_normalized_df: pd.DataFrame,
     ):
         self.plot_confusion_matrix(
+            train_confusion_df,
+            self.output_dir / "matriz_confusion_train.png",
+            "Matriz de Confusión - Entrenamiento",
+            value_format="d",
+        )
+        self.plot_confusion_matrix(
+            train_confusion_normalized_df,
+            self.output_dir / "matriz_confusion_train_normalizada.png",
+            "Matriz de Confusión Normalizada - Entrenamiento",
+            value_format=".2f",
+        )
+        self.plot_confusion_matrix(
+            confusion_df,
+            self.output_dir / "matriz_confusion_validacion.png",
+            "Matriz de Confusión - Validación",
+            value_format="d",
+        )
+        self.plot_confusion_matrix(
+            confusion_normalized_df,
+            self.output_dir / "matriz_confusion_validacion_normalizada.png",
+            "Matriz de Confusión Normalizada - Validación",
+            value_format=".2f",
+        )
+        # Compatibilidad hacia atrás con nombres previos usando validación
+        self.plot_confusion_matrix(
             confusion_df,
             self.output_dir / "matriz_confusion.png",
-            "Matriz de Confusión",
+            "Matriz de Confusión - Validación",
             value_format="d",
         )
         self.plot_confusion_matrix(
             confusion_normalized_df,
             self.output_dir / "matriz_confusion_normalizada.png",
-            "Matriz de Confusión Normalizada",
+            "Matriz de Confusión Normalizada - Validación",
             value_format=".2f",
         )
         self.plot_summary_metrics(
@@ -673,6 +849,9 @@ class StaticModelMetrics:
         print(f"Pesos por clase: {summary['use_class_weights']}")
         print(f"Protótipos por clase: {summary['prototypes_per_class']}")
         print("-" * 60)
+        print(f"Train Accuracy:     {summary['train_accuracy']:.4f}")
+        print(f"Train Bal. Acc.:    {summary['train_balanced_accuracy']:.4f}")
+        print(f"Train Top-3 Acc.:   {summary['train_top_3_accuracy']:.4f}")
         print(f"Accuracy:           {summary['accuracy']:.4f}")
         print(f"Balanced Accuracy:  {summary['balanced_accuracy']:.4f}")
         print(f"Precision macro:    {summary['precision_macro']:.4f}")

@@ -31,6 +31,30 @@ class HandVectorizer:
         self.reference_data = None
         self.reference_landmarks, self.reference_labels = self.load_reference_dataset()
 
+    def get_extra_distance_features(self, landmarks: np.ndarray) -> list[float]:
+        """
+        Rasgos geométricos extra para separar mejor clases visualmente cercanas.
+        """
+        wrist = landmarks[0]
+        fingertip_indices = [4, 8, 12, 16, 20]
+        fingertip_distances = [
+            np.linalg.norm(wrist - landmarks[idx]) for idx in fingertip_indices
+        ]
+
+        consecutive_tip_pairs = [(4, 8), (8, 12), (12, 16), (16, 20)]
+        consecutive_tip_distances = [
+            np.linalg.norm(landmarks[a] - landmarks[b]) for a, b in consecutive_tip_pairs
+        ]
+
+        palm_span = np.linalg.norm(landmarks[5] - landmarks[17])
+
+        return fingertip_distances + consecutive_tip_distances + [palm_span]
+
+    def build_feature_vector_from_landmarks(self, landmarks: np.ndarray) -> np.ndarray:
+        features = landmarks.flatten().tolist()
+        features.extend(self.get_extra_distance_features(landmarks))
+        return np.asarray(features, dtype=float)
+
     def resolve_project_path(self, path_str: str) -> Path:
         path = Path(path_str)
         return path if path.is_absolute() else self.project_root / path
@@ -100,10 +124,11 @@ class HandVectorizer:
             print(f"Dataset de referencia cargado con {valid_classes} clases válidas")
             print(f"Clases disponibles: {sorted(self.reference_data.keys())}")
             
-            # Verificar que todas las clases tengan 68 características
+            expected_dim = len(next(iter(self.reference_data.values()))) if self.reference_data else 0
+            # Verificar que todas las clases tengan la misma dimensionalidad
             for class_name, features in self.reference_data.items():
-                if len(features) != 68:
-                    print(f"⚠️  ADVERTENCIA: Clase '{class_name}' tiene {len(features)} características en lugar de 68")
+                if len(features) != expected_dim:
+                    print(f"⚠️  ADVERTENCIA: Clase '{class_name}' tiene {len(features)} características con dimensionalidad inconsistente")
             
             # Devolver los datos de referencia
             landmarks = list(self.reference_data.values())
@@ -116,8 +141,8 @@ class HandVectorizer:
 
     def get_generated_landmark_features(self, row: pd.Series) -> np.ndarray:
         """
-        Construye un vector de 68 características a partir de una fila del CSV
-        usando landmarks reales y distancias desde la muñeca a las puntas.
+        Construye un vector de características a partir de una fila del CSV
+        usando landmarks reales y rasgos geométricos derivados.
         """
         landmarks = []
         for i in range(21):
@@ -130,19 +155,7 @@ class HandVectorizer:
             )
 
         landmarks = np.asarray(landmarks, dtype=float)
-        features = landmarks.flatten().tolist()
-
-        wrist = landmarks[0]
-        fingertip_indices = [4, 8, 12, 16, 20]
-        distances = [np.linalg.norm(wrist - landmarks[idx]) for idx in fingertip_indices]
-        features.extend(distances)
-
-        if len(features) < 68:
-            features.extend([0.0] * (68 - len(features)))
-        elif len(features) > 68:
-            features = features[:68]
-
-        return np.asarray(features, dtype=float)
+        return self.build_feature_vector_from_landmarks(landmarks)
 
     def preprocess_image(self, image):
         """
@@ -345,50 +358,20 @@ class HandVectorizer:
     def get_landmark_features(self, landmarks_data: Dict) -> np.ndarray:
         """
         Extrae características numéricas de los landmarks
-        Siempre retorna exactamente 68 características
+        usando coordenadas y rasgos geométricos derivados.
         """
         if not landmarks_data or not landmarks_data['landmarks']:
             return None
         
-        landmarks = landmarks_data['landmarks']
-        features = []
-        
-        # Coordenadas de todos los landmarks (21 × 3 = 63)
-        for landmark in landmarks:
-            features.extend([landmark['x'], landmark['y'], landmark['z']])
-        
-        # Características adicionales (5 distancias)
-        if len(landmarks) >= 21:  # MediaPipe detecta 21 landmarks
-            # Distancias entre puntos clave
-            wrist = np.array([landmarks[0]['x'], landmarks[0]['y'], landmarks[0]['z']])
-            thumb_tip = np.array([landmarks[4]['x'], landmarks[4]['y'], landmarks[4]['z']])
-            index_tip = np.array([landmarks[8]['x'], landmarks[8]['y'], landmarks[8]['z']])
-            middle_tip = np.array([landmarks[12]['x'], landmarks[12]['y'], landmarks[12]['z']])
-            ring_tip = np.array([landmarks[16]['x'], landmarks[16]['y'], landmarks[16]['z']])
-            pinky_tip = np.array([landmarks[20]['x'], landmarks[20]['y'], landmarks[20]['z']])
-            
-            # Distancias desde la muñeca a las puntas de los dedos
-            distances = [
-                np.linalg.norm(wrist - thumb_tip),
-                np.linalg.norm(wrist - index_tip),
-                np.linalg.norm(wrist - middle_tip),
-                np.linalg.norm(wrist - ring_tip),
-                np.linalg.norm(wrist - pinky_tip)
-            ]
-            
-            features.extend(distances)
-        else:
-            # Si no hay 21 landmarks, rellenar con ceros
-            features.extend([0.0] * 5)
-        
-        # Asegurar que siempre tengamos exactamente 68 características
-        while len(features) < 68:
-            features.append(0.0)
-        
-        if len(features) > 68:
-            features = features[:68]
-        
-        return np.array(features)
+        landmarks = np.asarray(
+            [[landmark['x'], landmark['y'], landmark['z']] for landmark in landmarks_data['landmarks']],
+            dtype=float,
+        )
+
+        if len(landmarks) < 21:
+            return None
+
+        return self.build_feature_vector_from_landmarks(landmarks)
 
     def mirror_landmarks_data(self, landmarks_data: Dict) -> Dict:
         """
