@@ -7,3 +7,4 @@
 [submodule "ASL-CallApp"]
 	path = ASL-CallApp
 	url = https://github.com/Asaph-Velazquez/ASL-CallApp.git
+	branch = main
