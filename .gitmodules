@@ -4,3 +4,6 @@
 [submodule "ASL-Web"]
 	path = ASL-Web
 	url = https://github.com/Asaph-Velazquez/ASL-Web.git
+[submodule "ASL-CallApp"]
+	path = ASL-CallApp
+	url = https://github.com/Asaph-Velazquez/ASL-CallApp.git
