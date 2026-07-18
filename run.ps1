@@ -40,6 +40,73 @@ function Test-CommandExists {
   return $null -ne (Get-Command $Name -ErrorAction SilentlyContinue)
 }
 
+function Add-PathIfMissing {
+  param([string]$Candidate)
+
+  if ([string]::IsNullOrWhiteSpace($Candidate)) {
+    return
+  }
+
+  if (-not (Test-Path -LiteralPath $Candidate)) {
+    return
+  }
+
+  $pathEntries = ($env:PATH -split ';').Where({ $_ -ne '' })
+  if ($pathEntries -notcontains $Candidate) {
+    $env:PATH = "$Candidate;$env:PATH"
+  }
+}
+
+function Update-SessionPathFromNpm {
+  try {
+    $npmPrefix = (npm config get prefix 2>$null).Trim()
+    if (-not [string]::IsNullOrWhiteSpace($npmPrefix)) {
+      Add-PathIfMissing -Candidate $npmPrefix
+      Add-PathIfMissing -Candidate (Join-Path $npmPrefix 'bin')
+    }
+  }
+  catch {
+    Write-Host 'No se pudo actualizar PATH desde npm; se continuara con la verificacion actual.' -ForegroundColor Yellow
+  }
+}
+
+function Install-Ngrok {
+  Write-Step 'ngrok no esta disponible en PATH. Intentando instalarlo automaticamente'
+
+  if (Test-CommandExists 'winget') {
+    Write-Host 'Instalando ngrok con winget...' -ForegroundColor Yellow
+    winget install --exact --id Ngrok.Ngrok --silent --accept-package-agreements --accept-source-agreements
+    return
+  }
+
+  if (Test-CommandExists 'npm') {
+    Write-Host 'Instalando ngrok con npm -g...' -ForegroundColor Yellow
+    npm install --global ngrok
+    Update-SessionPathFromNpm
+    return
+  }
+
+  throw 'No se encontro un instalador compatible para ngrok. Instala winget o npm e intenta de nuevo.'
+}
+
+function Ensure-NgrokAvailable {
+  if (Test-CommandExists 'ngrok') {
+    return
+  }
+
+  Install-Ngrok
+
+  if (-not (Test-CommandExists 'ngrok')) {
+    Update-SessionPathFromNpm
+  }
+
+  if (-not (Test-CommandExists 'ngrok')) {
+    throw 'ngrok no pudo instalarse o no quedo disponible en PATH.'
+  }
+
+  Write-Host 'ngrok instalado y disponible.' -ForegroundColor Green
+}
+
 function Ensure-PathExists {
   param([string]$Path, [string]$Label)
   if (-not (Test-Path -LiteralPath $Path)) {
@@ -92,9 +159,7 @@ if (-not $SkipDocker) {
 }
 
 if (-not $SkipNgrok) {
-  if (-not (Test-CommandExists 'ngrok')) {
-    throw 'ngrok no esta disponible en PATH.'
-  }
+  Ensure-NgrokAvailable
 }
 
 Ensure-EnvFiles
