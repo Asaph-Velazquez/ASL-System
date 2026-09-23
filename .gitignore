@@ -61,6 +61,7 @@ build-info.json
 .turbo/
 .nuxt/
 .nyc_output/
+model_onnx/
 
 # ============================================
 # IDE & Editor
@@ -122,6 +123,7 @@ desktop.ini
 # Project-specific
 # ============================================
 *.ps1
+!/model_onnx/test.ps1
 .expo/
 .turbo/
 
