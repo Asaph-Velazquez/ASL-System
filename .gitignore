@@ -106,6 +106,10 @@ lerna-debug.log*
 .sisyphus/
 .agents/
 skills-lock.json
+/test/**
+!/ASL-ModelServer/tests/
+!/ASL-ModelServer/tests/**
+ASL-ModelServer/tests/__pycache__/
 
 # ============================================
 # OS & System Files
@@ -122,7 +126,9 @@ desktop.ini
 # ============================================
 # Project-specific
 # ============================================
+.dev-logs/
 *.ps1
+!/infra/tests/run-startup.tests.ps1
 !/model_onnx/test.ps1
 .expo/
 .turbo/

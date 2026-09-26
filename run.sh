@@ -6,9 +6,9 @@ set -Eeuo pipefail
 skip_mobile=false
 skip_docker=false
 skip_ngrok=false
-use_nginx_gateway=false
+use_nginx_gateway=true
 gateway_port=8080
-ngrok_port=3001
+ngrok_port=0
 
 usage() {
   cat <<'EOF'
@@ -17,9 +17,10 @@ Uso: ./run.sh [opciones]
   --skip-mobile                 Omite Expo
   --skip-docker                 Omite MongoDB en Docker (incompatible con --use-nginx-gateway)
   --skip-ngrok                  Omite el tunel ngrok
-  --use-nginx-gateway           Inicia el gateway Nginx con Docker Compose
+  --use-nginx-gateway           Inicia el gateway Nginx con Docker Compose (por defecto)
+  --no-nginx-gateway            Modo legado, sin reconocimiento ASL
   --gateway-port PUERTO         Puerto del gateway Nginx (por defecto: 8080)
-  --ngrok-port PUERTO           Puerto que publicara ngrok (por defecto: 3001)
+  --ngrok-port PUERTO           Puerto de ngrok (automatico: gateway o 3001 en modo legado)
   -h, --help                    Muestra esta ayuda
 EOF
 }
@@ -30,6 +31,7 @@ while (($#)); do
     --skip-docker) skip_docker=true ;;
     --skip-ngrok) skip_ngrok=true ;;
     --use-nginx-gateway) use_nginx_gateway=true ;;
+    --no-nginx-gateway) use_nginx_gateway=false ;;
     --gateway-port)
       gateway_port="${2:?Falta el valor de --gateway-port}"
       shift
@@ -43,6 +45,15 @@ while (($#)); do
   esac
   shift
 done
+
+if [[ "$ngrok_port" == 0 ]]; then
+  ngrok_port=3001
+  [[ "$use_nginx_gateway" == true ]] && ngrok_port="$gateway_port"
+fi
+if [[ "$skip_ngrok" == false && "$use_nginx_gateway" == true && "$ngrok_port" != "$gateway_port" ]]; then
+  echo '--ngrok-port debe coincidir con --gateway-port para enrutar reconocimiento ASL al modelo.' >&2
+  exit 2
+fi
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$repo_root"
@@ -175,7 +186,7 @@ fi
 
 printf '\nServicios solicitados iniciados.\n'
 if [[ "$use_nginx_gateway" == true ]]; then
-  echo "Tunel recomendado: publica el gateway Nginx en $gateway_port."
+  echo "Tunel recomendado: publica el gateway Nginx en $gateway_port; /api/asl se enruta a ASL-ModelServer."
 else
   echo 'Tunel recomendado: modo transicion, publica ASL-Web/server en 3001.'
 fi

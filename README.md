@@ -42,6 +42,7 @@ Rutas base del gateway:
 
 - `/api/interpreter/*` -> `ASL-CallAPP/server` en `3101`
 - `/calls` -> `ASL-CallAPP/server` en `3101` con soporte `WebSocket upgrade`
+- `/api/asl/*` -> `ASL-ModelServer` en la red privada de Docker, sin pasar por ASL-Web
 - resto de rutas HTTP -> `ASL-Web/server` en `3001`
 
 Arranque local del gateway:
@@ -56,12 +57,51 @@ O desde el runbook raiz:
 .\run.ps1 -UseNginxGateway -NgrokPort 8080
 ```
 
+El gateway y el modelo se inician por defecto con `./run.ps1` o `./run.sh`.
+El puerto de ngrok se deriva de `GatewayPort` / `--gateway-port` (8080 por defecto);
+un puerto explicito distinto se rechaza antes de iniciar servicios.
+Para el modo legado sin reconocimiento ASL usa `-UseNginxGateway:$false` en
+PowerShell o `--no-nginx-gateway` en Bash. `-SkipDocker` / `--skip-docker`
+requiere ese modo legado. Los procesos de desarrollo de PowerShell se inician
+en segundo plano sin abrir ventanas. Usa `./run.ps1 -ShowWindows` para mostrar
+las terminales nuevas. Los logs se guardan en `.dev-logs/` (no versionados);
+`Get-Content .dev-logs/ngrok-*.log -Tail 30` permite consultar errores del tunel.
+El script reutiliza ngrok si su inspector local confirma el puerto esperado;
+si apunta a otro puerto, se detiene sin cerrar el tunel. Los puertos ocupados
+se informan con PID y no generan otra copia del servicio. Antes de terminar,
+el script comprueba HTTP y el contenido esperado de las APIs, interfaces Vite,
+Metro y gateway; esto es una comprobacion de disponibilidad, no una prueba E2E.
+Web usa 5173 y CallApp 5174
+con `strictPort`, evitando que Vite se desplace silenciosamente a otro puerto.
+
+En Windows se ejecuta `ngrok.exe` directamente: primero se busca en PATH y,
+si ngrok proviene de npm, junto al paquete que referencia su shim. No se ejecuta
+el archivo sin extension que algunos wrappers npm llaman por error. La salida
+nativa y los errores se incorporan al log, conservando el codigo de terminacion.
+Los logs pueden contener datos de desarrollo; redactalos antes de compartirlos.
+
+Si la camara muestra HTTP 413, verifica primero el destino del tunel:
+`ngrok http 8080`, no `ngrok http 3001`. Una secuencia de 60 frames puede ocupar
+unos 80 KB: el backend del hotel limita JSON a 10 KB, mientras que la ruta
+autenticada de inferencia admite 256 KiB. No aumentes el limite global del hotel
+para resolver un error de enrutamiento.
+
+En Windows, `run.ps1` reutiliza `asl-mongodb` si pertenece al mismo archivo
+Compose, usa `mongo:7`, conserva un montaje escribible en `/data/db` y publica
+27017. Si esta detenido lo inicia; si no existe lo crea con Compose. Verifica
+un ping antes de continuar. Si encuentra otro propietario/configuracion, se
+detiene sin eliminar contenedores ni volumenes. Pruebas del arranque:
+`./infra/tests/run-startup.tests.ps1` (simuladas; no inician servicios reales).
+
 Con esa variante:
 
 - `ngrok` debe publicar `http://localhost:8080`
 - `ASL-Web/server` sigue en `3001`
 - `ASL-CallAPP/server` sigue en `3101`
-- el gateway usa `host.docker.internal` para alcanzar ambos servicios desde el contenedor
+- `ASL-ModelServer` se construye y arranca con el gateway; utiliza el mismo `JWT_SECRET` que `ASL-Web/server/.env`
+- antes del arranque, reemplaza el `JWT_SECRET` de ejemplo por un secreto real; el servidor del modelo rechaza el valor de ejemplo
+- la app móvil debe usar la URL del gateway en `EXPO_PUBLIC_API_URL` y `EXPO_PUBLIC_WS_URL` (o usar solo `EXPO_PUBLIC_PUBLIC_BASE_URL` sin las dos variables explícitas)
+- el gateway usa `host.docker.internal` para alcanzar Web y CallAPP, y una red privada para el servidor del modelo
 
 Nota de entorno:
 
