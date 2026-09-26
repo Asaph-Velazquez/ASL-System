@@ -20,19 +20,21 @@ cd "Nombre del modulo de desarrollo"
 
 Durante el desarrollo del sistema se trabaja con los siguientes modulos:
 
-- `ASL-IA`: desarrollo del modelo de Machine Learning para procesamiento de lenguaje de senas, principalmente en Python.
 - `ASL-MobileAPP`: aplicacion movil principal del sistema, desarrollada con Expo + TypeScript.
 - `ASL-Web`: panel web operativo para personal del hotel, desarrollado con React + Vite + TypeScript. Recibe, visualiza y administra solicitudes en tiempo real.
 - `ASL-CallApp`: dominio de llamadas e interpretacion remota. Incluye un servidor Node.js + WebSocket para sesion de llamada, presencia de interpretes y envio de reportes a `ASL-Web`, ademas de una consola web para el interprete.
+- `ASL-ModelServer`: servicio independiente de inferencia ASL, desarrollado con FastAPI. Aloja el modelo ONNX y su manifiesto, recibe landmarks de la mano (no imagenes ni video), valida la sesion del huesped y devuelve la glosa reconocida con su confianza. Se publica unicamente a traves de `/api/asl/*` en el gateway Nginx; mantiene la inferencia separada del backend operativo de `ASL-Web`.
 
 ## 🔗 Relacion Entre Modulos
 
 El flujo general del sistema se distribuye asi:
 
 1. `ASL-MobileAPP` captura la interaccion del huesped.
-2. `ASL-IA` procesa o apoya el entendimiento del lenguaje de senas.
+2. Para reconocimiento de senas, la app obtiene landmarks y los envia a `ASL-ModelServer`, que ejecuta el modelo ONNX y responde con una prediccion.
 3. `ASL-Web` permite al personal atender solicitudes y visualizar seguimiento operativo.
 4. `ASL-CallApp` gestiona llamadas en tiempo real entre huesped e interprete, y reinyecta reportes de interpretacion hacia `ASL-Web` cuando se requiere seguimiento.
+
+`ASL-IA` ya no forma parte de la arquitectura activa ni del flujo de ejecucion. El servicio vigente para inferencia de señas es `ASL-ModelServer`.
 
 ## 🚪 Gateway Nginx Base
 
