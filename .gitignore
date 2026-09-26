@@ -131,6 +131,7 @@ desktop.ini
 !/model_onnx/test.ps1
 .expo/
 .turbo/
+.agents/feature_list.json
 
 # ============================================
 # Testing
