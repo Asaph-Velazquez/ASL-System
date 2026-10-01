@@ -1,6 +1,25 @@
 # ASL-ModelServer
 
-FastAPI inference service. The phone sends only 21 hand landmarks (x, y, z) per frame; no video or images leave the device. The model recognizes only the 43 labels in `manifest.json`.
+FastAPI inference service. The phone sends only 21 hand landmarks (x, y, z) per frame; no video or images leave the device. The V2 model from `model_onnx/V2_export_onnx` recognizes the 76 labels in `manifest.json`.
+
+## Updating the model
+
+Deploy `model.onnx` together with its matching `manifest.json`: V2 changes the labels and normalization statistics as well as the model checksum. Its input remains `float32 [batch, 160, 63]`, with zero padding before normalization. The service's existing `inference.py` is compatible and retains the persistent ONNX session used by the API.
+
+The Docker image embeds both files, so rebuild and recreate the service after an update. From the repository root, with Docker and the development database running:
+
+```powershell
+docker compose -f .\docker-compose.nginx.yml up -d --build asl-model-server
+docker compose -f .\docker-compose.nginx.yml exec asl-model-server python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/health').read().decode())"
+```
+
+V2 should return `{"status":"ok","labels":76}`. If the gateway is already running, reload its upstream resolution after recreating the model container:
+
+```powershell
+docker compose -f .\docker-compose.nginx.yml exec nginx-gateway nginx -s reload
+```
+
+The gateway's `/health` route belongs to the hotel backend; check model health inside the model container as shown above.
 
 ## Local development
 
