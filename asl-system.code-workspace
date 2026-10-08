@@ -1,8 +1,8 @@
 {
 	"folders": [
 		{
-			"name": "ASL-IA",
-			"path": "ASL-IA"
+			"name": "ASL-ModelServer",
+			"path": "ASL-ModelServer"
 		},
 		{
 			"name": "ASL-MobileAPP",
@@ -19,6 +19,10 @@
 		{
 			"name": "Docs",
 			"path": "Docs"
+		},
+		{
+			"name": "Agents",
+			"path": ".agents"
 		}
 	],
 	"settings": {
