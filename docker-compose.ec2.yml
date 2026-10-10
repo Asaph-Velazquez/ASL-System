@@ -1,0 +1,114 @@
+name: asl-ec2
+
+x-runtime: &runtime
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "3"
+
+services:
+  mongodb:
+    <<: *runtime
+    image: mongo:7
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: asl
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD:?Configure MONGO_PASSWORD in infra/ec2/.env}
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: [CMD, mongosh, --quiet, --eval, "quit(db.adminCommand('ping').ok ? 0 : 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  asl-web-server:
+    <<: *runtime
+    build: ./ASL-Web/server
+    environment:
+      NODE_ENV: production
+      PORT: "3001"
+      USE_HTTPS: "false"
+      MONGODB_URI: mongodb://asl:${MONGO_PASSWORD:?required}@mongodb:27017/asl-hotel?authSource=admin
+      JWT_SECRET: ${JWT_SECRET:?Configure JWT_SECRET}
+      CALL_JWT_SECRET: ${CALL_JWT_SECRET:?Configure CALL_JWT_SECRET}
+      CALL_INTERNAL_TOKEN: ${CALL_INTERNAL_TOKEN:?Configure CALL_INTERNAL_TOKEN}
+      CALL_PROXY_TARGET: http://asl-call-server:3101
+      CALL_SERVER_PATH: /calls
+      HOTEL_WS_PATH: /ws/hotel
+      ENABLE_LEGACY_ROOT_WS: "false"
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://tauri.localhost,https://tauri.localhost,tauri://localhost}
+    volumes:
+      - web_logs:/app/logs
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  asl-call-server:
+    <<: *runtime
+    build: ./ASL-CallAPP/server
+    environment:
+      NODE_ENV: production
+      PORT: "3101"
+      MONGODB_URI: mongodb://asl:${MONGO_PASSWORD:?required}@mongodb:27017/asl-call?authSource=admin
+      CALL_JWT_SECRET: ${CALL_JWT_SECRET:?required}
+      INTERPRETER_JWT_SECRET: ${INTERPRETER_JWT_SECRET:?Configure INTERPRETER_JWT_SECRET}
+      CALL_INTERNAL_TOKEN: ${CALL_INTERNAL_TOKEN:?required}
+      ASL_WEB_API_URL: http://asl-web-server:3001
+      TRUST_PROXY: loopback,linklocal,uniquelocal
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://tauri.localhost,https://tauri.localhost,tauri://localhost}
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      asl-web-server:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3101/api/health').then(async r=>{const b=await r.json();if(!r.ok||b.mongoReadyState!==1)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  asl-model-server:
+    <<: *runtime
+    build: ./ASL-ModelServer
+    environment:
+      JWT_SECRET: ${JWT_SECRET:?required}
+      MONGODB_URI: mongodb://asl:${MONGO_PASSWORD:?required}@mongodb:27017/asl-hotel?authSource=admin
+      ASL_RATE_LIMIT_PER_MINUTE: "30"
+      ASL_MAX_INFLIGHT: "2"
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+  nginx-gateway:
+    <<: *runtime
+    image: nginx:stable-alpine
+    ports:
+      - "${GATEWAY_BIND:-0.0.0.0}:${GATEWAY_PORT:-80}:80"
+    volumes:
+      - ./infra/ec2/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      asl-web-server:
+        condition: service_healthy
+      asl-call-server:
+        condition: service_healthy
+      asl-model-server:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, wget, -q, -O, /dev/null, http://127.0.0.1/gateway-health]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  mongodb_data:
+  web_logs:

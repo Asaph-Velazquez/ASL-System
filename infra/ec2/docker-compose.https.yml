@@ -1,0 +1,29 @@
+# Usar junto al Compose raiz; rutas relativas al primer archivo Compose.
+services:
+  nginx-gateway:
+    ports: !override
+      - "127.0.0.1:8080:80"
+  caddy:
+    restart: unless-stopped
+    image: caddy:2-alpine
+    environment:
+      PUBLIC_HOST: ${PUBLIC_HOST:?Configure PUBLIC_HOST}
+      ACME_EMAIL: ${ACME_EMAIL:?Configure ACME_EMAIL}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./infra/ec2/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      nginx-gateway:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  caddy_data:
+  caddy_config:

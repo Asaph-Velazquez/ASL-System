@@ -1,0 +1,6 @@
+{
+  email {$ACME_EMAIL}
+}
+{$PUBLIC_HOST} {
+  reverse_proxy nginx-gateway:80
+}

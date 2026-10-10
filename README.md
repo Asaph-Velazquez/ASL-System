@@ -129,6 +129,11 @@ Modo de transicion:
 
 ## 📝 Notas
 
+Para pruebas en una sola instancia EC2, usar `docker-compose.ec2.yml` y seguir
+[la guia EC2](infra/ec2/README.md). Incluye los tres backends, MongoDB persistente,
+gateway HTTP/WebSocket y una opcion HTTPS; las aplicaciones Tauri se distribuyen
+por separado. No requiere los procesos locales de `run.ps1` ni `host.docker.internal`.
+
 - Cada modulo mantiene su propio entorno, dependencias y README local.
 - Se recomienda revisar el README de cada carpeta antes de instalar o ejecutar servicios.
 - Si el flujo remoto incluye videollamada, la referencia publica recomendada debe salir del gateway Nginx; no mezcles un dominio publico para `3001` con otro tunel improvisado para `3101` dentro del mismo runbook base.
