@@ -2,6 +2,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import jwt
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 from pymongo.errors import ServerSelectionTimeoutError
@@ -52,13 +53,18 @@ def test_guest_inference_and_health():
         assert request(client).json() == {"glosa": "WATER", "confidence": 0.9, "index": 0}
 
 
-def test_real_model_bundle_smoke():
-    predictor = Predictor(".")
+@pytest.mark.parametrize("length", [15, 60, 128, 160])
+def test_real_model_bundle_smoke(length):
+    predictor = Predictor(Path(__file__).resolve().parents[1])
+    frames = np.random.default_rng(51).uniform(-0.1, 0.9, (length, 63)).tolist()
+    expected = predictor.predict_sequence(frames)
     with TestClient(create_app(predictor=predictor, stays=FakeStays(stay()), secret=SECRET)) as client:
-        result = request(client)
+        assert client.get("/health").json() == {"status": "ok", "labels": 139}
+        result = request(client, body={"landmarks": frames})
         assert result.status_code == 200
-        assert result.json()["glosa"] in predictor.manifest["labels"]
-        assert 0 <= result.json()["confidence"] <= 1
+        assert result.json() == {key: expected[key] for key in ("glosa", "confidence", "index")}
+        assert request(client, body={"landmarks": [frames[0]] * 161}).status_code == 422
+        assert request(client, body={"landmarks": [[0.0] * 126] * 15}).status_code == 422
 
 
 def test_guest_auth_and_stay():
