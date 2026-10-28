@@ -1,5 +1,6 @@
 """Opt-in integration check against local Nginx, MongoDB and the real ONNX model."""
 
+import argparse
 import json
 import os
 import sys
@@ -16,22 +17,26 @@ from pymongo import MongoClient
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from inference import Predictor  # noqa: E402
+from inference import Predictor, load_sequence  # noqa: E402
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--input", type=Path, help="Optional CSV/NPY gesture; defaults to the bundled V5 example")
+    parser.add_argument("--model-only", action="store_true", help="Skip hotel-backend validation; model authentication is still tested")
+    args = parser.parse_args()
     secret = os.environ["JWT_SECRET"]
     mongo_uri = os.environ.get("ASL_TEST_MONGODB_URI", "mongodb://127.0.0.1:27017/asl-hotel")
     base_url = os.environ.get("ASL_TEST_GATEWAY_URL", "http://127.0.0.1:8080").rstrip("/")
     endpoint = base_url + "/api/asl/predict"
     opener = build_opener(ProxyHandler({}))
-    sequence = np.load(ROOT.parent / "model_onnx/example_input.npy", allow_pickle=False)
-    # The reference has 68 frames; the mobile API accepts at most 60.
-    if len(sequence) > 60:
-        sequence = sequence[np.linspace(0, len(sequence) - 1, 60, dtype=int)]
-    assert 15 <= len(sequence) <= 60 and sequence.shape[1] == 63
-    frames = sequence.tolist()
     predictor = Predictor(ROOT)
+    sequence = load_sequence(args.input or ROOT / "example_input.npy", predictor.manifest["feature_columns"])
+    if len(sequence) > 160:
+        sequence = sequence[np.linspace(0, len(sequence) - 1, 160, dtype=int)]
+    assert 15 <= len(sequence) <= 160 and sequence.shape[1] == 63
+    frames = sequence.tolist()
+    max_length_frames = np.resize(sequence, (160, 63)).tolist()
     expected = predictor.predict_sequence(sequence)
     now = datetime.now(timezone.utc)
     stay_id = "asl-inference-smoke-" + str(uuid4())
@@ -64,15 +69,17 @@ def main():
             "checkOut": now + timedelta(minutes=5), "createdAt": now,
         }).inserted_id
         try:
-            status, body, elapsed = post({}, token, base_url + "/api/auth/validate")
-            assert status == 200 and body.get("valid") is True, ("guest_validation", status, body)
-            results.append({"case": "guest_validation", "status": status, "elapsed_ms": elapsed})
+            if not args.model_only:
+                status, body, elapsed = post({}, token, base_url + "/api/auth/validate")
+                assert status == 200 and body.get("valid") is True, ("guest_validation", status, body)
+                results.append({"case": "guest_validation", "status": status, "elapsed_ms": elapsed})
             for name, payload, session, expected_status in [
                 ("no_session", {"landmarks": frames}, None, 401),
                 ("short_sequence", {"landmarks": frames[:14]}, token, 422),
-                ("long_sequence", {"landmarks": frames + frames[:1]}, token, 422),
+                ("long_sequence", {"landmarks": [frames[0]] * 161}, token, 422),
                 ("invalid_frame", {"landmarks": [frame[:62] for frame in frames]}, token, 422),
                 ("real_model_parity", {"landmarks": frames}, token, 200),
+                ("max_length_model_parity", {"landmarks": max_length_frames}, token, 200),
                 ("oversized_body", {"landmarks": frames, "padding": "x" * (256 * 1024)}, token, 413),
             ]:
                 print(f"Checking {name}...", flush=True)
@@ -80,10 +87,11 @@ def main():
                 assert status == expected_status, (name, status, body)
                 result = {"case": name, "status": status, "elapsed_ms": elapsed}
                 if status == 200:
-                    assert body["glosa"] == expected["glosa"]
-                    assert body["index"] == expected["index"]
+                    reference = expected if name == "real_model_parity" else predictor.predict_sequence(payload["landmarks"])
+                    assert body["glosa"] == reference["glosa"]
+                    assert body["index"] == reference["index"]
                     assert 0 <= body["confidence"] <= 1
-                    assert abs(body["confidence"] - expected["confidence"]) < 1e-5
+                    assert abs(body["confidence"] - reference["confidence"]) < 1e-5
                     result.update(body)
                 results.append(result)
                 print(json.dumps(result), flush=True)
@@ -94,7 +102,10 @@ def main():
         finally:
             deleted = stays.delete_one({"_id": document_id, "stayId": stay_id})
             assert deleted.deleted_count == 1, "Temporary test stay was not removed"
-    print(json.dumps({"frames": len(frames), "payload_bytes": len(json.dumps({"landmarks": frames}).encode()),
+    print(json.dumps({"input_source": "gesture_file" if args.input else "bundled_v5_example",
+                      "hotel_validation_checked": not args.model_only,
+                      "frames": len(frames), "payload_bytes": len(json.dumps({"landmarks": frames}).encode()),
+                      "max_length_payload_bytes": len(json.dumps({"landmarks": max_length_frames}).encode()),
                       "results": results, "temporary_stay_removed": True}, indent=2))
 
 

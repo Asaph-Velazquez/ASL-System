@@ -27,7 +27,7 @@ Frame = Annotated[list[FiniteFloat], Field(min_length=63, max_length=63)]
 
 class PredictionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    landmarks: Annotated[list[Frame], Field(min_length=15, max_length=60)]
+    landmarks: Annotated[list[Frame], Field(min_length=15, max_length=160)]
 
 
 class SlidingRateLimiter:

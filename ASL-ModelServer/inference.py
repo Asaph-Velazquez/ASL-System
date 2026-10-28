@@ -53,8 +53,7 @@ def load_sequence(input_path, feature_columns):
 
 def preprocess_sequence(sequence, manifest):
     sequence = np.asarray(sequence, dtype=np.float32)
-    feature_dim = int(manifest["input"]["feature_dim"])
-    max_seq_len = int(manifest["input"]["max_seq_len"])
+    _, max_seq_len, feature_dim = manifest["input"]["shape"]
 
     if sequence.ndim != 2 or sequence.shape[1] != feature_dim:
         raise ValueError(
@@ -66,18 +65,25 @@ def preprocess_sequence(sequence, manifest):
         raise ValueError("La secuencia contiene NaN o valores infinitos.")
 
     if sequence.shape[0] > max_seq_len:
-        indices = np.linspace(
-            0, sequence.shape[0] - 1, max_seq_len, dtype=int
-        )
-        sequence = sequence[indices]
+        strategy = manifest["preprocessing"]["long_sequence"]
+        if strategy == "keep last frames":
+            sequence = sequence[-max_seq_len:]
+        elif strategy == "uniform_linspace_resample":
+            indices = np.linspace(0, sequence.shape[0] - 1, max_seq_len, dtype=int)
+            sequence = sequence[indices]
+        else:
+            raise ValueError(f"Preprocesamiento no soportado: {strategy}")
     elif sequence.shape[0] < max_seq_len:
         padding = np.zeros(
             (max_seq_len - sequence.shape[0], feature_dim), dtype=np.float32
         )
         sequence = np.vstack((sequence, padding))
 
-    mean = np.asarray(manifest["normalization"]["mean"], dtype=np.float32)
-    std = np.asarray(manifest["normalization"]["std"], dtype=np.float32)
+    normalization = manifest.get("normalization")
+    if normalization is None:
+        return sequence
+    mean = np.asarray(normalization["mean"], dtype=np.float32)
+    std = np.asarray(normalization["std"], dtype=np.float32)
     if mean.shape != (feature_dim,) or std.shape != (feature_dim,):
         raise ValueError("Las estadisticas del manifiesto no son validas.")
     if np.any(std <= 0):
@@ -104,14 +110,32 @@ class Predictor:
         )
 
     def predict_sequence(self, sequence):
-        prepared = preprocess_sequence(sequence, self.manifest)[None, ...]
-        logits = self.session.run(
+        prepared = preprocess_sequence(sequence, self.manifest)
+        if self.manifest["input"].get("onnx_flattened", False):
+            prepared = prepared.reshape(1, -1)
+        else:
+            prepared = prepared[None, ...]
+        scores = self.session.run(
             [self.manifest["output"]["name"]],
             {self.manifest["input"]["name"]: prepared},
         )[0]
-        probabilities = softmax(logits)[0]
-        index = int(np.argmax(probabilities))
+        kind = self.manifest["output"].get("kind", "logits")
+        if kind == "logits":
+            values = softmax(scores)[0]
+        elif kind == "probabilities":
+            values = np.asarray(scores, dtype=np.float32)[0]
+        else:
+            raise ValueError(f"Tipo de salida no soportado: {kind}")
         labels = self.manifest["labels"]
+        indices = self.manifest.get("output_class_indices", list(range(len(labels))))
+        if (values.shape != (len(indices),) or not np.isfinite(values).all()
+                or len(set(indices)) != len(indices)
+                or any(not isinstance(i, int) or i < 0 or i >= len(labels) for i in indices)
+                or np.any(values < 0) or np.any(values > 1)):
+            raise ValueError("Las probabilidades o los indices de salida no son validos.")
+        probabilities = np.zeros(len(labels), dtype=np.float32)
+        probabilities[indices] = values
+        index = int(np.argmax(probabilities))
         return {
             "index": index,
             "glosa": labels[index],
@@ -129,7 +153,7 @@ def predict(bundle_dir, input_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Inferencia del Transformer ONNX")
+    parser = argparse.ArgumentParser(description="Inferencia del modelo ASL ONNX")
     parser.add_argument("--model", required=True, help="Directorio del bundle")
     parser.add_argument("--input", required=True, help="Secuencia .csv o .npy")
     args = parser.parse_args()
