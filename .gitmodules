@@ -1,9 +1,11 @@
 [submodule "ASL-MobileAPP"]
 	path = ASL-MobileAPP
 	url = https://github.com/Asaph-Velazquez/ASL-MobileAPP.git
+	branch = master
 [submodule "ASL-Web"]
 	path = ASL-Web
 	url = https://github.com/Asaph-Velazquez/ASL-Web.git
+	branch = main
 [submodule "ASL-CallApp"]
 	path = ASL-CallAPP
 	url = https://github.com/Asaph-Velazquez/ASL-CallApp.git
