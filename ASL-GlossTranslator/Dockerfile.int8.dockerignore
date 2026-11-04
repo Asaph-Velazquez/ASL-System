@@ -1,0 +1,6 @@
+**
+!ASL-GlossTranslator/
+!ASL-GlossTranslator/requirements.txt
+!ASL-GlossTranslator/service.py
+!ASL-GlossTranslator/verify_package.py
+!ASL-GlossTranslator/quantize_package.py

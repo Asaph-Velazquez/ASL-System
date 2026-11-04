@@ -1,0 +1,12 @@
+services:
+  asl-gloss-translator:
+    image: asl-gloss-translator:local
+    build:
+      context: .
+      dockerfile: ASL-GlossTranslator/Dockerfile
+    environment:
+      TRANSLATOR_THREADS: "2"
+      TRANSLATOR_TIMEOUT_SECONDS: "10"
+    ports:
+      - "127.0.0.1:8002:8000"
+    restart: unless-stopped

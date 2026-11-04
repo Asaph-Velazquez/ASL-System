@@ -1,0 +1,14 @@
+FROM python:3.11-slim
+WORKDIR /app
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 \
+    MODEL_PACKAGE_DIR=/opt/asl-model TRANSLATOR_THREADS=2 \
+    TRANSLATOR_TIMEOUT_SECONDS=10 OMP_NUM_THREADS=2
+COPY ASL-GlossTranslator/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+COPY model_onnx/asl_translator_fp32/asl_translator_fp32/ /opt/asl-model/
+COPY ASL-GlossTranslator/service.py ASL-GlossTranslator/verify_package.py ./
+RUN python -c "from verify_package import verify_package; verify_package('/opt/asl-model')"
+USER 10001:10001
+EXPOSE 8000
+HEALTHCHECK --interval=15s --timeout=3s --start-period=120s CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"
+CMD ["python", "-m", "uvicorn", "service:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]

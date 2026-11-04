@@ -2,6 +2,7 @@
 param(
   [switch]$SkipMobile,
   [switch]$SkipDocker,
+  [switch]$UseGlossTranslator,
   [switch]$SkipNgrok,
   [switch]$ShowWindows,
   [switch]$UseNginxGateway = $true,
@@ -314,6 +315,9 @@ if (-not $SkipDocker) {
   }
 }
 
+if ($UseGlossTranslator -and $SkipDocker) {
+  throw 'UseGlossTranslator requiere Docker; quita SkipDocker para iniciar FP32.'
+}
 if ($UseNginxGateway -and $SkipDocker) {
   throw 'No puedes combinar -UseNginxGateway con -SkipDocker en este runbook. El gateway Nginx se levanta con docker compose; quita -SkipDocker o arranca el gateway manualmente sin usar esta opcion.'
 }
@@ -336,7 +340,16 @@ if (-not $SkipDocker) {
   }
 }
 
-Start-DevProcess -Name 'ASL-Web Server' -WorkingDirectory $paths.WebServer -Command 'npm.cmd run dev' -Port 3001 -ReadyUrl 'http://localhost:3001/api/health' -ExpectedText '"status"\s*:\s*"ok"'
+$webServerCommand = 'npm.cmd run dev'
+if ($UseGlossTranslator) {
+  Write-Step 'Construyendo e iniciando el traductor FP32'
+  docker compose -f (Join-Path $repoRoot 'docker-compose.gloss.yml') up -d --build --wait --wait-timeout 180 asl-gloss-translator
+  if ($LASTEXITCODE -ne 0) { throw 'No se pudo iniciar el traductor FP32.' }
+  Wait-DevService -Name 'Traductor FP32' -Url 'http://127.0.0.1:8002/health' -ExpectedText '"variant"\s*:\s*"fp32"'
+  $webServerCommand = '$env:GLOSS_TRANSLATOR_URL = ''http://127.0.0.1:8002''; $env:GLOSS_TRANSLATOR_ENGINE = ''asl-translator-fp32''; npm.cmd run dev'
+  Write-Host 'FP32 activado para el proceso nuevo; reinicia el backend si 3001 ya esta ocupado.' -ForegroundColor Yellow
+}
+Start-DevProcess -Name 'ASL-Web Server' -WorkingDirectory $paths.WebServer -Command $webServerCommand -Port 3001 -ReadyUrl 'http://localhost:3001/api/health' -ExpectedText '"status"\s*:\s*"ok"'
 Start-DevProcess -Name 'ASL-CallApp Server' -WorkingDirectory $paths.CallAppServer -Command 'npm.cmd run dev' -Port 3101 -ReadyUrl 'http://localhost:3101/api/health' -ExpectedText '"mongoReadyState"\s*:\s*1'
 Start-DevProcess -Name 'ASL-Web App' -WorkingDirectory $paths.WebApp -Command 'npm.cmd run dev -- --port 5173 --strictPort' -Port 5173 -ReadyUrl 'http://localhost:5173' -ExpectedText '/src/main.tsx'
 Start-DevProcess -Name 'ASL-CallApp App' -WorkingDirectory $paths.CallApp -Command 'npm.cmd run dev -- --port 5174 --strictPort' -Port 5174 -ReadyUrl 'http://localhost:5174' -ExpectedText '/src/main.tsx'

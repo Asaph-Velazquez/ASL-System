@@ -1,5 +1,20 @@
 # 📖 Directorio del Proyecto
 
+## Traducción de solicitudes a inglés
+
+`ASL-GlossTranslator` ejecuta el paquete ONNX FP32 en un contenedor privado.
+ASL-Web aplica autodetección a solicitudes nuevas de texto y ASL: conserva el
+inglés natural y traduce las glosas detectadas antes de guardar y difundir.
+La detección y traducción pueden fallar; los metadatos conservan el original.
+
+En local usa `./run.ps1 -UseGlossTranslator -SkipNgrok`, con Docker Desktop
+activo y el paquete en `model_onnx/asl_translator_fp32/asl_translator_fp32`.
+Si ya existe un backend en 3001, reinícialo con la configuración del traductor.
+El servicio local queda en `127.0.0.1:8002`; INT8 es una variante experimental
+separada. En producción, el overlay `docker-compose.gloss-production.yml`
+conecta FP32 al backend sin publicar puertos. Consulta `ASL-GlossTranslator/README.md`
+para límites, despliegue y pruebas.
+
 Este repositorio concentra los modulos principales del sistema ASL para recepcion, gestion operativa, interpretacion remota y procesamiento de lenguaje de senas.
 
 ## 💾 Clonar Repositorio

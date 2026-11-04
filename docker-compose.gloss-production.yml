@@ -1,0 +1,25 @@
+# Overlay para docker-compose.ec2.yml; conserva la red privada del backend.
+services:
+  asl-web-server:
+    environment:
+      GLOSS_TRANSLATOR_URL: http://asl-gloss-translator:8000
+      GLOSS_TRANSLATOR_ENGINE: asl-translator-fp32
+      GLOSS_TRANSLATOR_TIMEOUT_MS: "10000"
+    depends_on:
+      asl-gloss-translator:
+        condition: service_healthy
+
+  asl-gloss-translator:
+    image: asl-gloss-translator:fp32
+    build:
+      context: .
+      dockerfile: ASL-GlossTranslator/Dockerfile
+    environment:
+      TRANSLATOR_THREADS: "2"
+      TRANSLATOR_TIMEOUT_SECONDS: "10"
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
