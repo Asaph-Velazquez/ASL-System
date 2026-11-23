@@ -1,5 +1,7 @@
 # Android Builds with Docker
 
+![Android build pipeline — ANDROID, DOCKER, EXPO SDK 54](assets/readme/android-builds.svg)
+
 Containerized APK tooling for ASL-MobileAPP. The Linux image provides Node.js 22,
 Java 17, Android SDK 36, NDK 27.1, and CMake 3.22. The host needs Docker Desktop
 with Linux containers; it does not need a local Java installation for this build.
@@ -9,6 +11,42 @@ Linux volume, excludes private `.env` files, installs dependencies with `npm ci`
 generates Android using Expo, and runs Gradle. Dependency and Gradle caches stay
 in Linux volumes. These versions match Expo SDK 54; review the toolchain when
 upgrading Expo.
+
+[Prepare](#prepare-the-builder) · [Build pipeline](#build-pipeline) · [Build APK](#build-an-apk) · [Signing](#signing-and-runtime-checks)
+
+## Build pipeline
+
+Source stays read-only on the host while generation, compilation, and verification run in dedicated Linux volumes.
+
+```mermaid
+---
+config:
+  theme: base
+  fontFamily: Arial, sans-serif
+  htmlLabels: false
+  themeVariables:
+    fontSize: 15px
+    lineColor: "#64748B"
+    edgeLabelBackground: "#F1F5F9"
+  flowchart:
+    curve: linear
+    nodeSpacing: 28
+    rankSpacing: 36
+    padding: 16
+---
+flowchart LR
+  accTitle: Containerized Android build
+  accDescr: Source stays read-only on the host while generation, compilation, and verification run in dedicated Linux volumes.
+  Source["Read-only source"] --> Workspace["Linux workspace"]
+  Workspace --> Expo["Expo prebuild"]
+  Expo --> Gradle["Gradle build"]
+  Gradle --> Verify["Verify + export"]
+  class Workspace,Expo,Gradle service
+  class Source,Verify data
+  classDef app fill:#16324F,stroke:#4F799D,color:#FFFFFF,stroke-width:1.5px
+  classDef service fill:#0F766E,stroke:#0F766E,color:#FFFFFF,stroke-width:1.5px
+  classDef data fill:#F1F5F9,stroke:#94A3B8,color:#16324F,stroke-width:1.5px
+```
 
 ## Prepare the builder
 

@@ -1,5 +1,7 @@
 # ASL System
 
+![Accessible hotel communication — MAIN, MULTI-MODULE, PRIVATE INFERENCE](infra/assets/readme/asl-system.svg)
+
 An accessible hotel communication platform for guests who use American Sign
 Language (ASL) or text. The system combines guest requests, a staff dashboard,
 remote interpreter calls, sign recognition, and private gloss-to-English
@@ -16,6 +18,41 @@ translation.
 - [Repository maintenance](#repository-maintenance)
 
 ## Architecture
+
+The gateway routes operational requests, sign landmarks, and call signaling to separate services.
+
+```mermaid
+---
+config:
+  theme: base
+  fontFamily: Arial, sans-serif
+  htmlLabels: false
+  themeVariables:
+    fontSize: 15px
+    lineColor: "#64748B"
+    edgeLabelBackground: "#F1F5F9"
+  flowchart:
+    curve: linear
+    nodeSpacing: 28
+    rankSpacing: 36
+    padding: 16
+---
+flowchart TB
+  accTitle: Platform overview
+  accDescr: The gateway routes operational requests, sign landmarks, and call signaling to separate services.
+  Guest["Guest app"] --> Gateway["HTTPS gateway"]
+  Gateway -->|Landmarks|Model["Sign recognition"]
+  Gateway -->|Requests|Hotel["Hotel backend"]
+  Gateway -->|Call events|Calls["Call backend"]
+  Hotel --> Translator["Private translator"]
+  Hotel --> Staff["Staff dashboard"]
+  Calls --> Interpreter["Interpreter console"]
+  class Guest,Staff,Interpreter app
+  class Gateway,Model,Hotel,Calls,Translator service
+  classDef app fill:#16324F,stroke:#4F799D,color:#FFFFFF,stroke-width:1.5px
+  classDef service fill:#0F766E,stroke:#0F766E,color:#FFFFFF,stroke-width:1.5px
+  classDef data fill:#F1F5F9,stroke:#94A3B8,color:#16324F,stroke-width:1.5px
+```
 
 1. Guests authenticate with their stay QR code in the mobile app and choose ASL
    or text communication.

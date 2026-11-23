@@ -1,5 +1,7 @@
 # ASL Gloss Translator
 
+![Gloss to English — MAIN, CPU / FP32, PRIVATE API](assets/readme/asl-gloss-translator.svg)
+
 Private CPU translation for ASL-Web. The service converts detected ASL glosses
 into English before the hotel backend stores and broadcasts a guest request.
 Natural English is detected and passed through unchanged.
@@ -8,6 +10,44 @@ The service runs the original domain-tuned FLAN-T5 package: FP32 ONNX encoder an
 decoder, tokenizer, context correction, preprocessing, and noun checks. Package
 weights and scripts remain unchanged. The container needs no GPU, PyTorch, or
 Transformers and downloads no model at runtime.
+
+[Setup](#local-startup) · [Translation flow](#translation-flow) · [API](#private-api) · [Limits](#limits-and-failure-behavior) · [Testing](#verification)
+
+## Translation flow
+
+Automatic detection preserves natural English and translates detected glosses through the verified package.
+
+```mermaid
+---
+config:
+  theme: base
+  fontFamily: Arial, sans-serif
+  htmlLabels: false
+  themeVariables:
+    fontSize: 15px
+    lineColor: "#64748B"
+    edgeLabelBackground: "#F1F5F9"
+  flowchart:
+    curve: linear
+    nodeSpacing: 28
+    rankSpacing: 36
+    padding: 16
+---
+flowchart TB
+  accTitle: Gloss detection and translation
+  accDescr: Automatic detection preserves natural English and translates detected glosses through the verified package.
+  Input["Private request"] --> Detect{"Gloss?"}
+  Detect -->|Yes|Translate["Prepare + translate"]
+  Detect -->|No|Pass["Keep English"]
+  Translate --> Result["English + metadata"]
+  Pass --> Result
+  class Input app
+  class Translate,Pass service
+  class Detect,Result data
+  classDef app fill:#16324F,stroke:#4F799D,color:#FFFFFF,stroke-width:1.5px
+  classDef service fill:#0F766E,stroke:#0F766E,color:#FFFFFF,stroke-width:1.5px
+  classDef data fill:#F1F5F9,stroke:#94A3B8,color:#16324F,stroke-width:1.5px
+```
 
 ## Model package and resources
 

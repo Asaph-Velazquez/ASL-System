@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="208" viewBox="0 0 960 208" role="img" aria-labelledby="title description">
+  <title id="title">FP32 and INT8 comparison</title>
+  <desc id="description">Controlled local measurements with a shared synthetic corpus. LOCAL EVALUATION; FP32 / INT8; 32 PHRASES.</desc>
+  <rect x="1" y="1" width="958" height="206" rx="15" fill="#16324F" stroke="#4B6985"/>
+  <path d="M16 1H944A15 15 0 0 1 959 16V23H1V16A15 15 0 0 1 16 1Z" fill="#0F766E"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <rect x="32" y="48" width="72" height="72" rx="15" fill="#0F766E" stroke="#50C9B8"/>
+    <text x="68" y="93" fill="#FFFFFF" font-size="24" font-weight="700" text-anchor="middle">ASL</text>
+    <text x="128" y="54" fill="#8EE3D5" font-size="11" font-weight="700" letter-spacing="1.8">ASL SYSTEM / EVALUATION</text>
+    <text x="128" y="94" fill="#FFFFFF" font-size="31" font-weight="650">FP32 and INT8 comparison</text>
+    <text x="128" y="122" fill="#DFEAF4" font-size="15">Controlled local measurements with a shared synthetic corpus.</text>
+    <g transform="translate(128,151)"><rect width="143.2" height="27" rx="6" fill="#0F766E" stroke="#2BA99A"/><text x="14" y="18" fill="#FFFFFF" font-size="11" font-weight="600" letter-spacing="0.6">LOCAL EVALUATION</text></g>
+    <g transform="translate(281.2,151)"><rect width="107.2" height="27" rx="6" fill="#203F5D" stroke="#4B6985"/><text x="14" y="18" fill="#FFFFFF" font-size="11" font-weight="600" letter-spacing="0.6">FP32 / INT8</text></g>
+    <g transform="translate(398.4,151)"><rect width="100" height="27" rx="6" fill="#203F5D" stroke="#4B6985"/><text x="14" y="18" fill="#FFFFFF" font-size="11" font-weight="600" letter-spacing="0.6">32 PHRASES</text></g>
+  </g>
+  <g fill="none" stroke="#6DBFB9" stroke-width="2" opacity="0.55">
+    <path d="M830 71H896V139H830Z"/><path d="M830 105H896M863 71V139"/>
+  </g>
+  <g fill="#16324F" stroke="#8EE3D5" stroke-width="2">
+    <rect x="822" y="63" width="16" height="16" rx="4"/>
+    <rect x="888" y="63" width="16" height="16" rx="4"/>
+    <rect x="855" y="97" width="16" height="16" rx="4" fill="#0F766E"/>
+    <rect x="822" y="131" width="16" height="16" rx="4"/>
+    <rect x="888" y="131" width="16" height="16" rx="4"/>
+  </g>
+</svg>

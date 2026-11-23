@@ -1,5 +1,7 @@
 # ASL Model Server
 
+![Sign inference — MAIN, FASTAPI + ONNX, 139 LABELS](assets/readme/asl-model-server.svg)
+
 Authenticated FastAPI / ONNX inference for ASL System. The phone sends the
 selected hand's 21 image landmarks per frame; recognition requests contain no
 images or video. The installed V5 Transformer classifies 139 labels.
@@ -7,6 +9,42 @@ images or video. The installed V5 Transformer classifies 139 labels.
 This service is versioned in the parent ASL-System repository. This guide
 describes production `main`, whose single-hand contract differs from experimental
 two-hand model branches.
+
+[Contract](#model-contract) · [Inference flow](#inference-flow) · [Docker](#start-with-docker) · [Mobile](#mobile-compatibility) · [Testing](#verification)
+
+## Inference flow
+
+The server validates the guest and landmark shape, then applies the installed model manifest before returning a prediction.
+
+```mermaid
+---
+config:
+  theme: base
+  fontFamily: Arial, sans-serif
+  htmlLabels: false
+  themeVariables:
+    fontSize: 15px
+    lineColor: "#64748B"
+    edgeLabelBackground: "#F1F5F9"
+  flowchart:
+    curve: linear
+    nodeSpacing: 28
+    rankSpacing: 36
+    padding: 16
+---
+flowchart LR
+  accTitle: Authenticated landmark inference
+  accDescr: The server validates the guest and landmark shape, then applies the installed model manifest before returning a prediction.
+  Auth["Guest authorization"] --> Validate["Validate landmarks"]
+  Validate --> Prepare["Pad + normalize"]
+  Prepare --> Model["ONNX inference"]
+  Model --> Result["Gloss + confidence"]
+  class Auth,Validate,Prepare,Model service
+  class Result data
+  classDef app fill:#16324F,stroke:#4F799D,color:#FFFFFF,stroke-width:1.5px
+  classDef service fill:#0F766E,stroke:#0F766E,color:#FFFFFF,stroke-width:1.5px
+  classDef data fill:#F1F5F9,stroke:#94A3B8,color:#16324F,stroke-width:1.5px
+```
 
 ## Model contract
 

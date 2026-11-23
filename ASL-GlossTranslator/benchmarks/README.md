@@ -1,10 +1,48 @@
 # FP32 and INT8 Comparison
 
+![FP32 and INT8 comparison — LOCAL EVALUATION, FP32 / INT8, 32 PHRASES](../assets/readme/fp32-int8-comparison.svg)
+
 Reproducible local comparison of two already running translator containers using
 the same 32 synthetic hotel phrases. The runner creates no accounts, uses no
 guest data, and writes nothing to MongoDB. The corpus is independent of training
 CSVs and has no human reference translations, so it cannot measure linguistic
 accuracy.
+
+[Run](#prerequisites-and-execution) · [Evaluation flow](#evaluation-flow) · [Method](#method) · [Limitations](#interpretation-and-limitations)
+
+## Evaluation flow
+
+The runner measures the two ready containers sequentially, alternating their order for each phrase.
+
+```mermaid
+---
+config:
+  theme: base
+  fontFamily: Arial, sans-serif
+  htmlLabels: false
+  themeVariables:
+    fontSize: 15px
+    lineColor: "#64748B"
+    edgeLabelBackground: "#F1F5F9"
+  flowchart:
+    curve: linear
+    nodeSpacing: 28
+    rankSpacing: 36
+    padding: 16
+---
+flowchart LR
+  accTitle: Local translator comparison
+  accDescr: The runner measures the two ready containers sequentially, alternating their order for each phrase.
+  Corpus["32 test phrases"] --> Warmup["Warm up models"]
+  Warmup --> Run["Alternate requests"]
+  Run --> Metrics["Record resources"]
+  Metrics --> Report["Compare outputs"]
+  class Warmup,Run service
+  class Corpus,Metrics,Report data
+  classDef app fill:#16324F,stroke:#4F799D,color:#FFFFFF,stroke-width:1.5px
+  classDef service fill:#0F766E,stroke:#0F766E,color:#FFFFFF,stroke-width:1.5px
+  classDef data fill:#F1F5F9,stroke:#94A3B8,color:#16324F,stroke-width:1.5px
+```
 
 ## Prerequisites and execution
 
