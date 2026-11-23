@@ -1,161 +1,174 @@
-# Servicio de glosas ASL a inglés
+# ASL Gloss Translator
 
-Servicio privado de ASL-Web para convertir frases en glosas a inglés antes de
-guardar y distribuir una solicitud. Ejecuta el paquete original
-`model_onnx/asl_translator_fp32/asl_translator_fp32`: FLAN-T5 ajustado al dominio,
-encoder y decoder ONNX de precisión completa, tokenizer, corrector de contexto,
-reglas de preprocesamiento y revisión de sustantivos. Los pesos y scripts del
-paquete se conservan sin cambios.
+Private CPU translation for ASL-Web. The service converts detected ASL glosses
+into English before the hotel backend stores and broadcasts a guest request.
+Natural English is detected and passed through unchanged.
 
-El contenedor funciona en CPU y no descarga modelos durante su ejecución.
-No necesita GPU, PyTorch ni Transformers. Verifica tamaños y SHA-256 de los
-16 archivos del manifiesto al construir la imagen y antes de cargar el modelo.
-La carga ocurre una sola vez por proceso; `/health` responde cuando termina.
+The service runs the original domain-tuned FLAN-T5 package: FP32 ONNX encoder and
+decoder, tokenizer, context correction, preprocessing, and noun checks. Package
+weights and scripts remain unchanged. The container needs no GPU, PyTorch, or
+Transformers and downloads no model at runtime.
 
-## Contrato privado
+## Model package and resources
 
-`POST /translate`, con JSON:
+Supply the verified package separately at
+`model_onnx/asl_translator_fp32/asl_translator_fp32` under the ASL-System root.
+The build and startup verify sizes and SHA-256 hashes for all 16 manifest files.
+Loading happens once per process; health is available after loading completes.
 
-```json
-{"text":"I WATER NEED","source":"recognizer","is_question":false}
-```
+The two FP32 ONNX files total 1,089,917,491 bytes, approximately 1.02 GiB. Runtime
+memory exceeds weight size. Allow at least 3 GiB of free memory for local tests
+and measure representative traffic with `docker stats` before setting production
+limits. Each additional worker would load another model copy.
 
-`text` es obligatorio. `source` admite `"recognizer"` o `null`; cuando se omite,
-el paquete detecta si el texto es glosa o inglés natural. El inglés natural se
-devuelve sin traducir. `is_question` admite un booleano o `null` y se puede omitir.
-La respuesta conserva el contrato del paquete:
+Model packages are ignored by Git. Distribute verified weights or a built image
+through a private channel; cloning this repository alone does not supply them.
+
+## Private API
+
+`POST /translate` accepts:
 
 ```json
 {
-  "gloss":"I WATER NEED",
-  "input_type":"gloss",
-  "corrected":"I WATER NEED",
-  "changes":[],
-  "preprocessed":"X-I NEED WATER",
-  "english":"I need water.",
-  "noun_fixes":[]
+  "text": "I WATER NEED",
+  "source": "recognizer",
+  "is_question": false
 }
 ```
 
-El ejemplo muestra la forma de la respuesta; el contenido exacto depende del
-modelo. `GET /health` devuelve
-`{"status":"ok","model":"asl_gloss_to_english","variant":"fp32"}`.
-El servicio no autentica usuarios del hotel: solo debe ser accesible desde el
-backend por una red privada de Docker o un puerto limitado a `127.0.0.1` en
-desarrollo. No se publica en el gateway ni se llama directamente desde las apps.
-ASL-Web conserva la autenticación y autorización existentes.
+`text` is required. `source` accepts `"recognizer"` or `null`; omit it for automatic
+gloss/English detection. `is_question` accepts a boolean or `null` and is optional.
 
-ASL-Web aplica autodetección a solicitudes nuevas tanto de modo texto como ASL.
-Conserva el mensaje original en los metadatos; los reintentos no vuelven a
-traducir. Una indisponibilidad del traductor impide guardar y difundir la petición.
+Illustrative response:
 
-Para producción, combina el Compose existente con
-`docker-compose.gloss-production.yml`, manteniendo sus archivos de entorno y
-otros overlays (por ejemplo HTTPS). Construye primero la imagen FP32 con el
-paquete local verificado y ejecuta `up -d --no-deps --wait` solo para
-`asl-gloss-translator asl-web-server`. El traductor queda sin puertos públicos.
-Respalda la imagen web anterior antes de recrearla. Los pesos no se versionan:
-distribuye el paquete verificado o la imagen construida por un canal privado.
-
-## Límites y errores
-
-- Cuerpo JSON: 8192 bytes; texto: entre 1 y 2000 caracteres, sin entradas vacías.
-- Entrada efectiva: hasta 128 tokens, incluyendo el prefijo del modelo y el
-  resultado de las reglas. Una entrada mayor se rechaza con `422`; no se entrega
-  una traducción de un texto truncado silenciosamente.
-- El modelo conserva su generación original: cuatro haces y un máximo de
-  128 tokens de salida. Una traducción puede contener errores u omisiones;
-  conservar la glosa original permite revisarla.
-- Hay una sola inferencia simultánea y no hay cola de solicitudes. Otra
-  petición concurrente recibe `503 translator_busy` y `Retry-After: 1`.
-- El plazo de respuesta predeterminado es de 10 segundos (`504` al agotarse).
-  La CPU nativa continúa hasta terminar y mantiene ocupado su cupo: cancelar
-  una espera HTTP no cancela ONNX. ASL-Web debe conservar el error como fallo
-  de traducción, sin presentar la glosa original como una traducción exitosa.
-- Datos inválidos: `422`; cuerpo demasiado grande: `413`; modelo no listo o
-  fallo de inferencia: `503`. Los errores no incluyen el texto recibido.
-
-## Construcción y arranque local
-
-Desde la raíz del repositorio:
-
-```powershell
-docker compose -f docker-compose.gloss.yml up -d --build
+```json
+{
+  "gloss": "I WATER NEED",
+  "input_type": "gloss",
+  "corrected": "I WATER NEED",
+  "changes": [],
+  "preprocessed": "X-I NEED WATER",
+  "english": "I need water.",
+  "noun_fixes": []
+}
 ```
 
-El puerto local es `http://127.0.0.1:8002`. Para ASL-Web ejecutado en el host,
-configura `GLOSS_TRANSLATOR_URL=http://127.0.0.1:8002`. Si ambos servicios están
-en la misma red de Docker, usa `http://asl-gloss-translator:8000`.
+Exact text depends on the model. `GET /health` returns:
 
-También se puede construir de forma independiente:
+```json
+{"status":"ok","model":"asl_gloss_to_english","variant":"fp32"}
+```
+
+The service does not authenticate hotel users. Keep it accessible only to the
+backend over a private Docker network or a loopback-bound development port.
+It has no public gateway route and is not called directly by guest/staff apps.
+ASL-Web retains guest authentication and authorization.
+
+## Limits and failure behavior
+
+| Constraint | Behavior |
+| --- | --- |
+| JSON body | Maximum 8192 bytes; oversized bodies return `413` |
+| Text | 1–2000 characters; blank/invalid input returns `422` |
+| Effective model input | Maximum 128 tokens including preprocessing and prefix; excess returns `422` |
+| Generation | Four beams, maximum 128 output tokens |
+| Concurrency | One inference; no request queue |
+| Busy response | `503 translator_busy`, `Retry-After: 1` |
+| HTTP deadline | Default 10 seconds; timeout returns `504` |
+| Model unavailable / inference failure | `503` |
+
+Input is rejected rather than silently truncated. Error responses omit received
+text. A timed-out HTTP wait does not cancel native ONNX work: the inference slot
+remains occupied until execution finishes. Retain the original gloss for review;
+translations may contain errors or omissions.
+
+## Local startup
+
+From the ASL-System root:
+
+```powershell
+docker compose -f docker-compose.gloss.yml up -d --build --wait --wait-timeout 180
+Invoke-RestMethod http://127.0.0.1:8002/health
+```
+
+For ASL-Web running on the host, set
+`GLOSS_TRANSLATOR_URL=http://127.0.0.1:8002` and restart the backend. On the same
+Docker network, use `http://asl-gloss-translator:8000`. The Web server Compose file
+already includes that private service connection.
+
+An independent build also uses the repository root as its context:
 
 ```powershell
 docker build -f ASL-GlossTranslator/Dockerfile -t asl-gloss-translator .
 docker run --rm -p 127.0.0.1:8002:8000 asl-gloss-translator
 ```
 
-El contexto de construcción usa una lista de archivos permitidos en
-`Dockerfile.dockerignore`; no envía dependencias de otras apps, archivos `.env`
-ni registros. El proceso del contenedor corre como usuario sin privilegios.
+The [Docker build allowlist](Dockerfile.dockerignore) excludes other application
+dependencies, local environments, and logs. The container runs without root
+privileges. Stop only the local translator with:
 
-Variables del servicio:
+```powershell
+docker compose -f docker-compose.gloss.yml stop asl-gloss-translator
+```
 
-| Variable | Valor inicial | Uso |
-|---|---|---|
-| `TRANSLATOR_THREADS` | `2` | Hilos de CPU de ONNX por sesión; admite 1 a 16. |
-| `TRANSLATOR_TIMEOUT_SECONDS` | `10` | Plazo HTTP; admite más de 0 y hasta 120 segundos. Coordinarlo con el plazo de ASL-Web y el acuse de la app. |
-| `MODEL_PACKAGE_DIR` | `/opt/asl-model` | Ubicación del paquete íntegro dentro de la imagen. |
+| Environment variable | Default | Purpose |
+| --- | --- | --- |
+| `TRANSLATOR_THREADS` | `2` | ONNX CPU threads per session, 1–16 |
+| `TRANSLATOR_TIMEOUT_SECONDS` | `10` | HTTP deadline, greater than 0 and at most 120 seconds |
+| `MODEL_PACKAGE_DIR` | `/opt/asl-model` | Complete verified package location |
 
-Los dos ONNX ocupan 1 089 917 491 bytes en disco (aproximadamente 1,02 GiB).
-El uso de RAM es mayor al tamaño de los pesos y depende de ONNX Runtime y la
-longitud de las frases. Para pruebas, reservar al menos 3 GiB libres y medir
-`docker stats` con frases reales antes de fijar límites de producción. No usar
-varios workers sin presupuestar una copia adicional del modelo por proceso.
+Coordinate deadlines with ASL-Web and the mobile request acknowledgement timeout.
 
-## Variante INT8 para comparación local
+## Hotel backend integration and production
 
-La construcción INT8 necesita primero la imagen local `asl-gloss-translator:local`.
-Desde la raíz del repositorio, ejecuta en este orden:
+ASL-Web autodetects both text-mode and ASL-mode requests. It stores original input
+in translation metadata and does not translate duplicate creation retries again.
+If translation is enabled but unavailable, the hotel backend does not save or
+broadcast a partial request. It does not pass an untranslated gloss off as a
+successful translation.
+
+The [production overlay](../docker-compose.gloss-production.yml) extends an
+existing deployment defining `asl-web-server`; it is not a standalone stack.
+Preserve that deployment's environment files, networks, and other overlays.
+Build the FP32 image from the verified local package first, retain the previous
+web image for rollback, and target only `asl-gloss-translator` and
+`asl-web-server` when recreating services with `up -d --no-deps --wait`.
+The production translator exposes no host port. Verify private health and a
+representative authenticated request after applying the deployment's full Compose
+configuration.
+
+## INT8 evaluation
+
+Build the local FP32 image before building the separate INT8 variant:
 
 ```powershell
 docker compose -f docker-compose.gloss.yml build asl-gloss-translator
 docker compose -f docker-compose.gloss-int8.yml up -d --build --wait
 ```
 
-El segundo comando genera un paquete independiente a partir de la imagen FP32 y
-lo sirve en `http://127.0.0.1:8003`. Cuantiza los pesos de las multiplicaciones
-matriciales del encoder y del decoder, incluidos sus subgrafos, mediante INT8
-dinámico por canal. Conserva el preprocesamiento y la generación originales.
-El paquete FP32 de origen permanece intacto.
+INT8 listens on `http://127.0.0.1:8003`. Dynamic per-channel quantization applies
+to encoder/decoder matrix-multiplication weights, including subgraphs, while
+preserving preprocessing and generation. The original FP32 package is unchanged.
+The final image contains the INT8 package and runtime dependencies, not FP32
+build layers. Its manifest records `variant: int8-dynamic`, updated sizes/hashes,
+and source/options/operator provenance.
 
-La construcción utiliza dos etapas: la primera necesita los pesos FP32 y las
-herramientas de cuantización; la imagen final copia solamente el paquete INT8 y
-las dependencias de ejecución. No hereda las capas ni los pesos FP32 de la etapa
-de construcción. Su `manifest.json` identifica `variant: int8-dynamic`, actualiza
-los hashes y tamaños e incluye `provenance` con el hash del manifiesto fuente,
-las opciones de cuantización y los operadores observados en ambos modelos.
+See the [comparison procedure](benchmarks/README.md). Local evaluation reduced
+resources and latency but changed meaning in some outputs, so INT8 remains an
+isolated experiment and FP32 remains the normal Web engine.
 
-Consulta [el procedimiento de comparación](benchmarks/README.md) para repetir las
-mediciones con las mismas frases. En la evaluación local INT8 redujo recursos y
-tiempos, pero introdujo cambios de significado en algunas traducciones. Por ello
-no se adoptó como motor habitual: ASL-Web continúa usando FP32 y la variante INT8
-queda disponible para evaluación aislada.
+## Verification
 
-## Verificación
-
-Con Python 3.11 y las dependencias de pruebas instaladas:
+From the ASL-System root, with Python 3.11:
 
 ```powershell
 python -m pip install -r ASL-GlossTranslator/requirements-test.txt
 python -m unittest discover -s ASL-GlossTranslator/tests -v
 ```
 
-Las pruebas de contrato sustituyen el traductor para comprobar validación,
-errores, saturación y plazos sin cargar los pesos. La comprobación real del
-modelo requiere construir el contenedor y enviar frases a `/translate`; las
-pruebas con sustitutos no demuestran calidad lingüística del modelo.
-
-Referencias de implementación:
-[ciclo de vida de FastAPI](https://fastapi.tiangolo.com/advanced/events/),
-[tokenizer del paquete](../model_onnx/asl_translator_fp32/asl_translator_fp32/README.md)
-y [administración de hilos de ONNX Runtime](https://onnxruntime.ai/docs/performance/tune-performance/threading.html).
+Contract tests substitute the translator to check validation, failures,
+saturation, and deadlines without loading weights. Real-model verification
+requires the built container and `/translate` requests. Backend integration tests
+are documented in the
+[Web guide](../ASL-Web/README.md#verification). Neither substituted tests nor a
+small example set establishes general linguistic accuracy.
